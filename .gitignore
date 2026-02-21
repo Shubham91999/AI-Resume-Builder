@@ -1,0 +1,82 @@
+# ============================================================
+# AI Resume Tailor — .gitignore
+# ============================================================
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+*.whl
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Virtual environment
+venv/
+.venv/
+env/
+.python-version
+
+# --- Node / Frontend ---
+node_modules/
+frontend/dist/
+frontend/.vite/
+*.tsbuildinfo
+
+# --- IDE / Editor ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.sublime-project
+*.sublime-workspace
+
+# --- Environment / Secrets ---
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# --- Data (user-specific runtime files) ---
+data/chroma_db/
+data/uploads/
+data/output/
+data/project_bank.yaml
+*.sqlite3
+*.db
+
+# --- Logs ---
+*.log
+logs/
+
+# --- Coverage / Testing ---
+.coverage
+coverage/
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- OS ---
+Thumbs.db
+.DS_Store
+._*
+.Spotlight-V100
+.Trashes
+
+# --- Misc ---
+*.bak
+*.tmp
+*.temp
+.ipynb_checkpoints/
+
+# --- Project specific ---
+idea.txt
+

@@ -1,0 +1,37 @@
+# ── Core Framework ──
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.10.4
+pydantic-settings==2.7.1
+
+# ── LLM ──
+litellm==1.57.4
+
+# ── Vector DB & Embeddings ──
+chromadb==0.6.3
+sentence-transformers==3.4.1
+
+# ── NLP & Scoring ──
+spacy==3.8.4
+
+# ── Resume Parsing ──
+pdfplumber==0.11.4
+python-docx==1.1.2
+
+# ── Job URL Scraping ──
+playwright==1.49.1
+
+# ── Google Drive ──
+google-api-python-client==2.159.0
+google-auth-oauthlib==1.2.1
+
+# ── PDF Generation ──
+docx2pdf==0.1.8
+
+# ── File Handling ──
+python-multipart==0.0.20
+pyyaml==6.0.2
+python-dotenv==1.0.1
+
+# ── Utilities ──
+httpx>=0.23.0,<0.28.0
