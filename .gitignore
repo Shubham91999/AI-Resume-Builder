@@ -46,9 +46,13 @@ frontend/.vite/
 
 # --- Data (user-specific runtime files) ---
 data/chroma_db/
+backend/data/chroma_db/
 data/uploads/
+backend/data/uploads/
 data/output/
+backend/data/output/
 data/project_bank.yaml
+backend/data/project_bank.yaml
 *.sqlite3
 *.db
 
