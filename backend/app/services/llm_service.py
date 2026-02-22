@@ -156,14 +156,16 @@ async def complete_json(
     # Try extracting from ```json ... ``` blocks
     if "```json" in raw:
         start = raw.index("```json") + 7
-        end = raw.index("```", start)
-        return json.loads(raw[start:end].strip())
+        end = raw.find("```", start)
+        if end != -1:
+            return json.loads(raw[start:end].strip())
 
     # Try extracting from ``` ... ``` blocks
     if "```" in raw:
         start = raw.index("```") + 3
-        end = raw.index("```", start)
-        return json.loads(raw[start:end].strip())
+        end = raw.find("```", start)
+        if end != -1:
+            return json.loads(raw[start:end].strip())
 
     raise ValueError(f"Could not parse LLM response as JSON: {raw[:200]}...")
 

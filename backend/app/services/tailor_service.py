@@ -62,8 +62,8 @@ async def tailor_resume(
         if progress_callback:
             try:
                 await progress_callback(step, num, total_steps, status, msg)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Progress callback failed at step '%s': %s", step, exc)
 
     # Helper for JD context strings
     jd_required = ", ".join(jd.required_skills)
@@ -104,7 +104,21 @@ async def tailor_resume(
     await _progress("Rewriting summary", step_num)
     logger.info("Tailoring step 2: summary")
 
-    est_years = _estimate_experience_years(resume)
+    # Compute years in Python — deterministic, never delegated to the LLM.
+    actual_years = _calculate_experience_years(resume)
+    years_display = _resolve_years_display(actual_years, jd.required_experience_years)
+    logger.info(
+        "Experience years — actual: %.1f, JD requires: %s, display: %s",
+        actual_years, jd.required_experience_years, years_display,
+    )
+
+    # Build experience highlights so the LLM has real metrics/achievements to cite.
+    highlight_lines: list[str] = []
+    for exp in resume.experience:
+        role_header = f"{exp.title} at {exp.company} ({exp.dates}):"
+        highlight_lines.append(role_header)
+        highlight_lines.extend(f"  - {b}" for b in exp.bullets[:3])
+    experience_highlights = "\n".join(highlight_lines) if highlight_lines else "N/A"
 
     summary_data = await complete_json(
         provider=provider,
@@ -116,10 +130,13 @@ async def tailor_resume(
                 job_title=jd.job_title,
                 company=jd.company,
                 required_skills=jd_required,
+                preferred_skills=jd_preferred,
+                key_responsibilities=jd_responsibilities,
                 keywords=jd_keywords,
+                years_display=years_display,
                 current_summary=resume.summary or "No existing summary",
                 candidate_skills=", ".join(resume.skills[:20]),
-                experience_years=est_years,
+                experience_highlights=experience_highlights,
             )},
         ],
         prompt_name="tailor_summary",
@@ -286,20 +303,98 @@ def _safe_list(data: dict, key: str) -> list[str]:
     return []
 
 
-def _estimate_experience_years(resume: ParsedResume) -> str:
-    """Rough estimate of years of experience for the prompt."""
+_MONTH_MAP: dict[str, int] = {
+    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+    "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
+    # seasons — map to rough mid-point month
+    "spring": 3, "summer": 6, "fall": 9, "autumn": 9, "winter": 12,
+}
+
+
+def _parse_month_year(token: str) -> "date | None":
+    """Parse a date token such as 'Jan 2022', 'January 2022', '2022', or 'Present'."""
+    import re
+    from datetime import date
+
+    token = token.strip().lower()
+    if token in ("present", "current", "now", "ongoing", "today"):
+        return date.today()
+
+    # "Month YYYY" or "MonthName YYYY"
+    m = re.match(r"([a-z]+)\s+(\d{4})", token)
+    if m:
+        month = _MONTH_MAP.get(m.group(1)[:3])
+        if month:
+            return date(int(m.group(2)), month, 1)
+
+    # bare "YYYY"
+    m = re.match(r"^(\d{4})$", token)
+    if m:
+        return date(int(m.group(1)), 1, 1)
+
+    return None
+
+
+def _calculate_experience_years(resume: ParsedResume) -> float:
+    """
+    Sum the actual duration of every experience entry (full-time + internships).
+    Returns total years as a float rounded to one decimal place.
+    """
+    import re
+    from datetime import date
+
     if not resume.experience:
-        return "0"
-    # Count number of roles as rough proxy
-    count = len(resume.experience)
-    if count >= 4:
-        return "8+"
-    elif count >= 3:
-        return "5-7"
-    elif count >= 2:
-        return "3-5"
-    else:
-        return "1-3"
+        return 0.0
+
+    total_months = 0
+
+    for exp in resume.experience:
+        raw = (exp.dates or "").strip()
+        if not raw:
+            continue
+
+        # Split on en-dash, em-dash, spaced hyphen, or " to "
+        # Use the first split point only so "Jan 2020 - Mar 2022" splits to ["Jan 2020", "Mar 2022"]
+        parts = re.split(r"\s*[–—]\s*|\s+-\s+|\s+to\s+", raw, maxsplit=1)
+
+        if len(parts) == 2:
+            start = _parse_month_year(parts[0])
+            end   = _parse_month_year(parts[1])
+        elif len(parts) == 1:
+            # Single value like "2022" — treat as a one-month entry (negligible)
+            start = _parse_month_year(parts[0])
+            end   = start
+        else:
+            continue
+
+        if start is None or end is None:
+            continue
+
+        months = (end.year - start.year) * 12 + (end.month - start.month)
+        if months > 0:
+            total_months += months
+
+    return round(total_months / 12, 1)
+
+
+def _resolve_years_display(actual_years: float, jd_required: int | None) -> str:
+    """
+    Decide what years string to surface in the summary.
+
+    Rules (per user spec):
+    - If JD requires X and candidate has >= X  →  use "X+" (ATS-aligned framing)
+    - If JD requires X and candidate has < X   →  use actual years (never inflate)
+    - If JD has no requirement                 →  use actual years
+    """
+    actual_int = int(actual_years)  # floor for display
+
+    if jd_required is not None:
+        if actual_years >= jd_required:
+            return f"{jd_required}+"
+        else:
+            return str(actual_int) if actual_int > 0 else "<1"
+
+    return str(actual_int) if actual_int > 0 else "<1"
 
 
 def _build_full_text(

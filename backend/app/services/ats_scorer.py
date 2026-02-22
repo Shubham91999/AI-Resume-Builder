@@ -404,12 +404,12 @@ def _education_match(jd_education: str | None, resume: ParsedResume) -> float:
 def _build_knockouts(missing_required: list[str]) -> list[KnockoutAlert]:
     """Build knockout alerts for missing required skills."""
     alerts: list[KnockoutAlert] = []
+    # Mark all as critical if 3 or more required skills are missing
+    severity = "critical" if len(missing_required) >= 3 else "warning"
     for skill in missing_required:
-        severity = "critical" if len(missing_required) > len(missing_required) * 0.5 else "warning"
-        # If more than half of required skills are missing, everything is critical
         alerts.append(KnockoutAlert(
             skill=skill,
-            severity="critical" if len(missing_required) >= 3 else "warning",
+            severity=severity,
             message=f"Required skill '{skill}' not found in resume",
         ))
     return alerts

@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { rankResumes, getCachedJDs, getCachedResumes } from "@/services/api";
 import type { RankingResponse, ResumeScore, ParsedJD, ParsedResume } from "@/types";
+import { Loader2, RefreshCw } from "lucide-react";
 
 export default function ScorePage() {
   const navigate = useNavigate();
@@ -65,9 +66,17 @@ export default function ScorePage() {
 
       {/* Warnings if missing data */}
       {!hasData && !loading && (
-        <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-4 text-amber-300 space-y-2">
-          {jds.length === 0 && <p>⚠️ No parsed JDs found. Go to the JD page and parse a job description first.</p>}
-          {resumes.length === 0 && <p>⚠️ No uploaded resumes found. Go to the Resume page and upload resumes first.</p>}
+        <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-4 text-amber-300 space-y-2 text-sm">
+          {jds.length === 0 && (
+            <p>⚠️ No parsed JDs found.{" "}
+              <button onClick={() => navigate("/jd")} className="underline hover:no-underline font-medium">Parse a job description first →</button>
+            </p>
+          )}
+          {resumes.length === 0 && (
+            <p>⚠️ No uploaded resumes found.{" "}
+              <button onClick={() => navigate("/resume")} className="underline hover:no-underline font-medium">Upload a resume first →</button>
+            </p>
+          )}
         </div>
       )}
 
@@ -98,8 +107,8 @@ export default function ScorePage() {
 
       {/* Loading */}
       {loading && (
-        <div className="text-center py-12">
-          <div className="text-4xl mb-3 animate-pulse">📊</div>
+        <div className="text-center py-12 space-y-3">
+          <Loader2 className="h-10 w-10 animate-spin text-blue-400 mx-auto" />
           <p className="text-zinc-400">Scoring resumes against the JD...</p>
         </div>
       )}
@@ -113,9 +122,10 @@ export default function ScorePage() {
             </h2>
             <button
               onClick={() => selectedJdId && runScoring(selectedJdId)}
-              className="text-xs text-zinc-500 hover:text-blue-400 transition-colors"
+              disabled={loading}
+              className="flex items-center gap-1.5 text-xs text-zinc-500 hover:text-blue-400 transition-colors disabled:opacity-50"
             >
-              ↻ Re-score
+              <RefreshCw className="h-3.5 w-3.5" /> Re-score
             </button>
           </div>
 

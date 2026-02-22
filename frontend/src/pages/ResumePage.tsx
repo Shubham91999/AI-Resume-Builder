@@ -10,6 +10,8 @@ import {
   importFromDrive,
 } from "@/services/api";
 import type { ParsedResume, DriveFile } from "@/types";
+import { useToast } from "@/components/Toast";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 
 // ── Helper: get selected model from localStorage ────────────────────────────
 function getSelectedModel(): { provider: string; model_key: string } | null {
@@ -27,11 +29,13 @@ function getSelectedModel(): { provider: string; model_key: string } | null {
 // ── Main Page ───────────────────────────────────────────────────────────────
 export default function ResumePage() {
   const navigate = useNavigate();
+  const { toast } = useToast();
   const [resumes, setResumes] = useState<ParsedResume[]>([]);
   const [uploading, setUploading] = useState(false);
   const [uploadQueue, setUploadQueue] = useState<{ name: string; status: "pending" | "uploading" | "done" | "error"; error?: string }[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [confirmClearAll, setConfirmClearAll] = useState(false);
 
   // Google Drive state
   const [driveConnected, setDriveConnected] = useState(false);
@@ -199,6 +203,7 @@ export default function ResumePage() {
               idx === i ? { ...item, status: "done" } : item
             )
           );
+          toast("success", `Parsed: ${parsed.name}`);
         } catch (err: unknown) {
           const msg = err instanceof Error ? err.message : "Upload failed";
           const detail =
@@ -440,14 +445,27 @@ export default function ResumePage() {
               Parsed Resumes ({resumes.length})
             </h2>
             <button
-              onClick={() => {
-                setResumes([]);
-                setUploadQueue([]);
-              }}
+              onClick={() => setConfirmClearAll(true)}
               className="text-xs text-zinc-500 hover:text-red-400 transition-colors"
             >
               Clear All
             </button>
+
+            {confirmClearAll && (
+              <ConfirmDialog
+                title="Clear all resumes?"
+                message="This will remove all parsed resumes from this session. You'll need to re-upload them."
+                confirmLabel="Clear All"
+                destructive
+                onConfirm={() => {
+                  setResumes([]);
+                  setUploadQueue([]);
+                  setConfirmClearAll(false);
+                  toast("success", "All resumes cleared");
+                }}
+                onCancel={() => setConfirmClearAll(false)}
+              />
+            )}
           </div>
 
           {resumes.map((resume) => (

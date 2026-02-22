@@ -9,6 +9,8 @@ import type {
   EmailGenerateResponse,
   GeneratedEmail,
 } from "@/types";
+import { Loader2 } from "lucide-react";
+import { useToast } from "@/components/Toast";
 
 function getSelectedModel(): { provider: string; model_key: string } | null {
   try {
@@ -24,6 +26,7 @@ function getSelectedModel(): { provider: string; model_key: string } | null {
 
 export default function EmailPage() {
   const navigate = useNavigate();
+  const { toast } = useToast();
   const [tailoredList, setTailoredList] = useState<TailoredResume[]>([]);
   const [selectedTailorId, setSelectedTailorId] = useState<string | null>(null);
   const [emails, setEmails] = useState<EmailGenerateResponse | null>(null);
@@ -63,6 +66,7 @@ export default function EmailPage() {
         model_key: model.model_key,
       });
       setEmails(result);
+      toast("success", "Cold emails generated successfully");
     } catch (err: unknown) {
       const detail =
         typeof err === "object" && err !== null && "response" in err
@@ -78,6 +82,7 @@ export default function EmailPage() {
   const copyToClipboard = (text: string, label: string) => {
     navigator.clipboard.writeText(text).then(() => {
       setCopied(label);
+      toast("success", `${label} copied to clipboard`);
       setTimeout(() => setCopied(null), 2000);
     });
   };
@@ -142,7 +147,7 @@ export default function EmailPage() {
       {/* Loading */}
       {loading && (
         <div className="bg-zinc-800/50 border border-zinc-700 rounded-xl p-8 text-center space-y-3">
-          <div className="text-3xl animate-pulse">✍️</div>
+          <Loader2 className="h-10 w-10 animate-spin text-blue-400 mx-auto" />
           <p className="text-zinc-400 text-sm">
             Writing cold emails… This takes about 15-20 seconds.
           </p>

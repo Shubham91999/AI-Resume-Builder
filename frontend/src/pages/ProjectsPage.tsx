@@ -9,9 +9,13 @@ import {
   getCachedJDs,
 } from "@/services/api";
 import type { ProjectBankEntry, SelectedProject, ParsedJD } from "@/types";
+import { Loader2, Pencil, Trash2 } from "lucide-react";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { useToast } from "@/components/Toast";
 
 export default function ProjectsPage() {
   const navigate = useNavigate();
+  const { toast } = useToast();
   const [projects, setProjects] = useState<ProjectBankEntry[]>([]);
   const [jds, setJds] = useState<ParsedJD[]>([]);
   const [selected, setSelected] = useState<SelectedProject[]>([]);
@@ -64,24 +68,27 @@ export default function ProjectsPage() {
       setFormSkills("");
       setShowForm(false);
       await refresh();
+      toast("success", `Project "${formName.trim()}" added`);
     } catch {
       setError("Failed to add project");
     }
   };
 
-  const handleDelete = async (id: string) => {
+  const handleDelete = async (id: string, name: string) => {
     try {
       await deleteProject(id);
       await refresh();
+      toast("success", `Project "${name}" deleted`);
     } catch {
       setError("Failed to delete project");
     }
   };
 
-  const handleUpdate = async (id: string, data: { name?: string; bullets?: string[]; skills?: string[] }) => {
+  const handleUpdate = async (id: string, name: string, data: { name?: string; bullets?: string[]; skills?: string[] }) => {
     try {
       await updateProject(id, data);
       await refresh();
+      toast("success", `Project "${name}" updated`);
     } catch {
       setError("Failed to update project");
     }
@@ -95,6 +102,7 @@ export default function ProjectsPage() {
       const jdId = jds[jds.length - 1].id;
       const result = await selectProjectsForJD(jdId);
       setSelected(result);
+      toast("success", `Selected ${result.length} best-matching projects`);
     } catch {
       setError("Failed to select projects. Add more projects or parse a JD first.");
     } finally {
@@ -164,7 +172,10 @@ export default function ProjectsPage() {
 
       {/* Project List */}
       {loading ? (
-        <div className="text-zinc-500 text-center py-8">Loading projects…</div>
+        <div className="flex items-center justify-center py-12 gap-2 text-zinc-500">
+          <Loader2 className="h-5 w-5 animate-spin" />
+          <span>Loading projects…</span>
+        </div>
       ) : projects.length === 0 ? (
         <div className="bg-zinc-800/50 border border-zinc-700 rounded-xl p-8 text-center">
           <div className="text-3xl mb-2">📁</div>
@@ -175,7 +186,7 @@ export default function ProjectsPage() {
       ) : (
         <div className="space-y-3">
           {projects.map((proj) => (
-            <ProjectCard key={proj.id} project={proj} onDelete={handleDelete} onUpdate={handleUpdate} />
+            <ProjectCard key={proj.id} project={proj} onDelete={(id) => handleDelete(id, proj.name)} onUpdate={(id, data) => handleUpdate(id, proj.name, data)} />
           ))}
         </div>
       )}
@@ -195,7 +206,7 @@ export default function ProjectsPage() {
               disabled={selecting}
               className="bg-purple-600 hover:bg-purple-500 disabled:bg-zinc-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
             >
-              {selecting ? "Analyzing…" : "🎯 Select Best 2"}
+              {selecting ? <><Loader2 className="h-4 w-4 animate-spin" /> Analyzing…</> : "🎯 Select Best 2"}
             </button>
           </div>
 
@@ -255,6 +266,7 @@ function ProjectCard({
 }) {
   const [expanded, setExpanded] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const [editName, setEditName] = useState(project.name);
   const [editBullets, setEditBullets] = useState(project.bullets.join("\n"));
   const [editSkills, setEditSkills] = useState(project.skills.join(", "));
@@ -352,20 +364,31 @@ function ProjectCard({
         <div className="flex gap-1 ml-2">
           <button
             onClick={() => setEditing(true)}
-            className="text-zinc-600 hover:text-blue-400 p-1 transition-colors"
+            className="text-zinc-600 hover:text-blue-400 p-1.5 rounded-md hover:bg-blue-400/10 transition-colors"
             title="Edit project"
           >
-            ✎
+            <Pencil className="h-3.5 w-3.5" />
           </button>
           <button
-            onClick={() => onDelete(project.id)}
-            className="text-zinc-600 hover:text-red-400 p-1 transition-colors"
+            onClick={() => setConfirmDelete(true)}
+            className="text-zinc-600 hover:text-red-400 p-1.5 rounded-md hover:bg-red-400/10 transition-colors"
             title="Delete project"
           >
-            ✕
+            <Trash2 className="h-3.5 w-3.5" />
           </button>
         </div>
       </div>
+
+      {confirmDelete && (
+        <ConfirmDialog
+          title="Delete project?"
+          message={`"${project.name}" will be permanently removed from your project bank.`}
+          confirmLabel="Delete"
+          destructive
+          onConfirm={() => { setConfirmDelete(false); onDelete(project.id); }}
+          onCancel={() => setConfirmDelete(false)}
+        />
+      )}
 
       {expanded && (
         <ul className="mt-2 space-y-1 border-t border-zinc-700/50 pt-2">

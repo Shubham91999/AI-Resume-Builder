@@ -13,6 +13,9 @@ import type {
   ParsedResume,
   RankingResponse,
 } from "@/types";
+import { Loader2, CheckCircle2, Circle, XCircle, Sparkles } from "lucide-react";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { useToast } from "@/components/Toast";
 
 function getSelectedModel(): { provider: string; model_key: string } | null {
   try {
@@ -33,10 +36,12 @@ type PipelineStep = {
 
 export default function TailorPage() {
   const navigate = useNavigate();
+  const { toast } = useToast();
   const [tailored, setTailored] = useState<TailoredResume | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [steps, setSteps] = useState<PipelineStep[]>([]);
+  const [showRetailorConfirm, setShowRetailorConfirm] = useState(false);
 
   // Data state
   const [jds, setJds] = useState<ParsedJD[]>([]);
@@ -123,6 +128,7 @@ export default function TailorPage() {
       clearInterval(stepInterval);
       setSteps((prev) => prev.map((s) => ({ ...s, status: "done" })));
       setTailored(result);
+      toast("success", `Resume tailored — ${result.keywords_coverage}% keyword coverage`);
     } catch (err: unknown) {
       clearInterval(stepInterval);
       setSteps((prev) =>
@@ -166,7 +172,7 @@ export default function TailorPage() {
       {/* Start button */}
       {ready && hasData && !tailored && !loading && (
         <div className="bg-zinc-800/50 border border-zinc-700 rounded-xl p-6 text-center space-y-4">
-          <div className="text-4xl">✨</div>
+          <Sparkles className="h-10 w-10 text-blue-400 mx-auto" />
           <div>
             <h3 className="font-semibold text-zinc-200">Ready to Tailor</h3>
             <p className="text-sm text-zinc-400 mt-1">
@@ -189,18 +195,18 @@ export default function TailorPage() {
           <h3 className="text-sm font-medium text-zinc-400 mb-2">Pipeline Progress</h3>
           {steps.map((step, i) => (
             <div key={i} className="flex items-center gap-3">
-              <span className="w-5 text-center">
-                {step.status === "done" && <span className="text-green-400">✓</span>}
-                {step.status === "active" && <span className="text-blue-400 animate-pulse">⏳</span>}
-                {step.status === "pending" && <span className="text-zinc-600">○</span>}
-                {step.status === "error" && <span className="text-red-400">✗</span>}
+              <span className="w-5 flex items-center justify-center">
+                {step.status === "done" && <CheckCircle2 className="h-4 w-4 text-green-400" />}
+                {step.status === "active" && <Loader2 className="h-4 w-4 text-blue-400 animate-spin" />}
+                {step.status === "pending" && <Circle className="h-4 w-4 text-zinc-600" />}
+                {step.status === "error" && <XCircle className="h-4 w-4 text-red-400" />}
               </span>
               <span
                 className={`text-sm ${
                   step.status === "done"
                     ? "text-zinc-300"
                     : step.status === "active"
-                    ? "text-blue-300"
+                    ? "text-blue-300 font-medium"
                     : step.status === "error"
                     ? "text-red-300"
                     : "text-zinc-600"
@@ -216,14 +222,26 @@ export default function TailorPage() {
       {/* Tailored Result */}
       {tailored && <TailoredView tailored={tailored} />}
 
+      {/* Confirm re-tailor dialog */}
+      {showRetailorConfirm && (
+        <ConfirmDialog
+          title="Re-tailor resume?"
+          message="This will clear the current tailored result and start over. Are you sure?"
+          confirmLabel="Yes, re-tailor"
+          onConfirm={() => {
+            setShowRetailorConfirm(false);
+            setTailored(null);
+            setSteps([]);
+          }}
+          onCancel={() => setShowRetailorConfirm(false)}
+        />
+      )}
+
       {/* Navigation */}
       {tailored && (
         <div className="flex justify-between pt-4">
           <button
-            onClick={() => {
-              setTailored(null);
-              setSteps([]);
-            }}
+            onClick={() => setShowRetailorConfirm(true)}
             className="text-zinc-400 hover:text-zinc-200 px-4 py-2 transition-colors"
           >
             ← Re-tailor

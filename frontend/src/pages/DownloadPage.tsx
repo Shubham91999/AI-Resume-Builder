@@ -1,8 +1,11 @@
 import { useState, useEffect } from "react";
 import { downloadDocx, downloadPdf, downloadZip, getCachedTailored, getScoreComparison } from "@/services/api";
 import type { TailoredResume, ScoreComparison } from "@/types";
+import { Loader2, FileDown } from "lucide-react";
+import { useToast } from "@/components/Toast";
 
 export default function DownloadPage() {
+  const { toast } = useToast();
   const [tailoredList, setTailoredList] = useState<TailoredResume[]>([]);
   const [scoreComparisons, setScoreComparisons] = useState<Record<string, ScoreComparison>>({});
   const [loading, setLoading] = useState(true);
@@ -13,15 +16,15 @@ export default function DownloadPage() {
     getCachedTailored()
       .then(async (data: TailoredResume[]) => {
         setTailoredList(data);
-        // Fetch score comparisons for each tailored resume
-        for (const t of data) {
-          try {
-            const comparison = await getScoreComparison(t.id);
-            setScoreComparisons((prev) => ({ ...prev, [t.id]: comparison }));
-          } catch {
-            // Score comparison may not be available if caches expired
-          }
+        // Fetch all score comparisons in parallel
+        const results = await Promise.allSettled(
+          data.map((t) => getScoreComparison(t.id).then((c) => ({ id: t.id, c })))
+        );
+        const comparisons: Record<string, ScoreComparison> = {};
+        for (const r of results) {
+          if (r.status === "fulfilled") comparisons[r.value.id] = r.value.c;
         }
+        setScoreComparisons(comparisons);
       })
       .catch(() => setError("Failed to load tailored resumes"))
       .finally(() => setLoading(false));
@@ -49,8 +52,10 @@ export default function DownloadPage() {
       a.click();
       a.remove();
       URL.revokeObjectURL(url);
+      toast("success", `${format.toUpperCase()} downloaded successfully`);
     } catch {
       setError(`Failed to download ${format.toUpperCase()}`);
+      toast("error", `Failed to download ${format.toUpperCase()}`);
     } finally {
       setDownloading(null);
     }
@@ -72,7 +77,10 @@ export default function DownloadPage() {
       )}
 
       {loading ? (
-        <div className="text-zinc-500 text-center py-12">Loading…</div>
+        <div className="flex items-center justify-center py-12 gap-2 text-zinc-500">
+          <Loader2 className="h-5 w-5 animate-spin" />
+          <span>Loading…</span>
+        </div>
       ) : tailoredList.length === 0 ? (
         <div className="bg-zinc-800/50 border border-zinc-700 rounded-xl p-8 text-center space-y-2">
           <div className="text-3xl">📄</div>
@@ -168,23 +176,23 @@ export default function DownloadPage() {
                 <button
                   onClick={() => handleDownload(t.id, "docx", t.name)}
                   disabled={downloading !== null}
-                  className="flex-1 bg-blue-600 hover:bg-blue-500 disabled:bg-zinc-700 text-white py-2.5 rounded-lg font-medium transition-colors text-sm"
+                  className="flex-1 flex items-center justify-center gap-1.5 bg-blue-600 hover:bg-blue-500 disabled:bg-zinc-700 text-white py-2.5 rounded-lg font-medium transition-colors text-sm"
                 >
-                  {downloading === t.id + "docx" ? "Generating…" : "📄 DOCX"}
+                  {downloading === t.id + "docx" ? <><Loader2 className="h-4 w-4 animate-spin" /> Generating…</> : <><FileDown className="h-4 w-4" /> DOCX</>}
                 </button>
                 <button
                   onClick={() => handleDownload(t.id, "pdf", t.name)}
                   disabled={downloading !== null}
-                  className="flex-1 bg-emerald-600 hover:bg-emerald-500 disabled:bg-zinc-700 text-white py-2.5 rounded-lg font-medium transition-colors text-sm"
+                  className="flex-1 flex items-center justify-center gap-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:bg-zinc-700 text-white py-2.5 rounded-lg font-medium transition-colors text-sm"
                 >
-                  {downloading === t.id + "pdf" ? "Converting…" : "📑 PDF"}
+                  {downloading === t.id + "pdf" ? <><Loader2 className="h-4 w-4 animate-spin" /> Converting…</> : <><FileDown className="h-4 w-4" /> PDF</>}
                 </button>
                 <button
                   onClick={() => handleDownload(t.id, "zip", t.name)}
                   disabled={downloading !== null}
-                  className="flex-1 bg-zinc-700 hover:bg-zinc-600 disabled:bg-zinc-800 text-white py-2.5 rounded-lg font-medium transition-colors text-sm"
+                  className="flex-1 flex items-center justify-center gap-1.5 bg-zinc-700 hover:bg-zinc-600 disabled:bg-zinc-800 text-white py-2.5 rounded-lg font-medium transition-colors text-sm"
                 >
-                  📦 ZIP
+                  {downloading === t.id + "zip" ? <><Loader2 className="h-4 w-4 animate-spin" /> Zipping…</> : <><FileDown className="h-4 w-4" /> ZIP</>}
                 </button>
               </div>
             </div>

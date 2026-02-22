@@ -53,9 +53,9 @@ async def parse_resume(
     """Parse an uploaded resume file (PDF/DOCX) into structured ParsedResume."""
     file_hash = md5_hash(file_bytes)
 
-    # Check cache by hash — avoid reprocessing the same file
+    # Check cache by hash and filename — avoid reprocessing the same file
     for cached in _resume_cache.values():
-        if cached.file_hash == file_hash:
+        if cached.file_hash == file_hash and cached.file_name == file_name:
             logger.info(f"Cache hit for {file_name} (hash={file_hash[:8]})")
             return cached
 
