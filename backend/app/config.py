@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     google_client_id: Optional[str] = None
     google_client_secret: Optional[str] = None
 
+    # Optional secret token to restrict download endpoint access
+    app_secret_token: Optional[str] = None
+
     # ChromaDB
     chroma_persist_dir: str = "data/chroma_db"
 
@@ -32,6 +35,11 @@ class Settings(BaseSettings):
 
 settings = Settings()
 
+
+# ── Provider / Model Defaults ───────────────────────────────────────────────
+
+DEFAULT_PROVIDER = "groq"
+DEFAULT_MODEL_KEY = "llama-3.3-70b"
 
 # ── Model Registry ──────────────────────────────────────────────────────────
 
