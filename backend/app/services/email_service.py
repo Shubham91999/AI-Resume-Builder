@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections import OrderedDict
 from typing import Any
 
 from app.models.email_models import EmailGenerateResponse, GeneratedEmail
@@ -19,8 +20,9 @@ from app.services.llm_service import complete_json
 
 logger = logging.getLogger(__name__)
 
-# In-memory cache for generated emails
-_email_cache: dict[str, EmailGenerateResponse] = {}
+# In-memory cache for generated emails — bounded to avoid unbounded memory growth
+_MAX_CACHE = 200
+_email_cache: OrderedDict[str, EmailGenerateResponse] = OrderedDict()
 
 
 async def generate_emails(
@@ -119,6 +121,8 @@ async def generate_emails(
     )
 
     _email_cache[result.id] = result
+    if len(_email_cache) > _MAX_CACHE:
+        _email_cache.popitem(last=False)  # evict oldest
     logger.info(f"Emails generated: id={result.id} for tailor_id={tailored.id}")
     return result
 

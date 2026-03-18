@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import uuid
 import asyncio
+from collections import OrderedDict
 from typing import Any
 
 from app.models.jd_models import JDType, ParsedJD
@@ -20,8 +21,9 @@ from app.services.llm_service import complete_json
 
 logger = logging.getLogger(__name__)
 
-# In-memory JD cache (session-scoped, lost on restart — fine for MVP)
-_jd_cache: dict[str, ParsedJD] = {}
+# In-memory JD cache — bounded to avoid unbounded memory growth
+_MAX_CACHE = 200
+_jd_cache: OrderedDict[str, ParsedJD] = OrderedDict()
 
 
 # ── Public API ───────────────────────────────────────────────────────────────
@@ -55,6 +57,8 @@ async def parse_jd_text(
 
     parsed = _build_parsed_jd(data, raw_text=text.strip())
     _jd_cache[parsed.id] = parsed
+    if len(_jd_cache) > _MAX_CACHE:
+        _jd_cache.popitem(last=False)  # evict oldest
     logger.info(f"Parsed JD: id={parsed.id} title={parsed.job_title} company={parsed.company}")
     return parsed
 
@@ -92,6 +96,16 @@ def get_cached_jd(jd_id: str) -> ParsedJD | None:
 def list_cached_jds() -> list[ParsedJD]:
     """Return all cached parsed JDs."""
     return list(_jd_cache.values())
+
+
+def update_cached_jd(jd_id: str, patch: dict) -> "ParsedJD | None":
+    """Apply a partial update to a cached JD. Returns the updated JD or None if not found."""
+    jd = _jd_cache.get(jd_id)
+    if jd is None:
+        return None
+    updated = jd.model_copy(update={k: v for k, v in patch.items() if v is not None})
+    _jd_cache[jd_id] = updated
+    return updated
 
 
 # ── URL Scraping ─────────────────────────────────────────────────────────────

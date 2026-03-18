@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections import OrderedDict
 from typing import Any
 
 from app.models.jd_models import ParsedJD
@@ -29,8 +30,9 @@ from app.services.project_service import select_projects_for_jd
 
 logger = logging.getLogger(__name__)
 
-# In-memory cache for tailored resumes
-_tailor_cache: dict[str, TailoredResume] = {}
+# In-memory cache for tailored resumes — bounded to avoid unbounded memory growth
+_MAX_CACHE = 200
+_tailor_cache: OrderedDict[str, TailoredResume] = OrderedDict()
 
 
 # ── Public API ───────────────────────────────────────────────────────────────
@@ -266,6 +268,8 @@ async def tailor_resume(
     )
 
     _tailor_cache[tailored.id] = tailored
+    if len(_tailor_cache) > _MAX_CACHE:
+        _tailor_cache.popitem(last=False)  # evict oldest
     logger.info(
         f"Tailoring complete: id={tailored.id} coverage={coverage:.1f}% "
         f"skills_added={len(skills_added)} experience_entries={len(tailored_experience)}"
@@ -316,7 +320,7 @@ def _parse_month_year(token: str) -> "date | None":
     import re
     from datetime import date
 
-    token = token.strip().lower()
+    token = " ".join(token.strip().lower().split())  # collapse multiple spaces
     if token in ("present", "current", "now", "ongoing", "today"):
         return date.today()
 

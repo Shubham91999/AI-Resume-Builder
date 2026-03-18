@@ -11,9 +11,12 @@ Responsibilities:
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import logging
 import re
 import tempfile
+import threading
 from pathlib import Path
 from typing import Any, Optional
 
@@ -31,6 +34,9 @@ logger = logging.getLogger(__name__)
 # Scopes: read-only access to Drive files
 SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
 
+# Maximum resume files fetched per folder listing to avoid memory exhaustion
+_MAX_DRIVE_FILES = 200
+
 # File types we accept from Drive
 ALLOWED_MIME_TYPES = {
     "application/pdf": "pdf",
@@ -46,6 +52,58 @@ _credentials: Any = None
 
 # Token persistence path
 _TOKEN_PATH = Path("data/drive_token.json")
+
+# Lock for thread-safe token read/write
+_token_lock = threading.Lock()
+
+
+# ── Token encryption helpers ─────────────────────────────────────────────────
+
+
+def _get_fernet():
+    """Return a Fernet instance keyed off GOOGLE_CLIENT_SECRET, or None if unavailable."""
+    try:
+        from cryptography.fernet import Fernet
+
+        secret = settings.google_client_secret
+        if not secret:
+            return None
+        # Derive a 32-byte key from the client secret
+        key = base64.urlsafe_b64encode(hashlib.sha256(secret.encode()).digest())
+        return Fernet(key)
+    except ImportError:
+        return None
+
+
+def _write_token(creds) -> None:
+    """Persist credentials to disk, encrypted if possible."""
+    _TOKEN_PATH.parent.mkdir(parents=True, exist_ok=True)
+    token_json = creds.to_json().encode()
+    fernet = _get_fernet()
+    if fernet:
+        _TOKEN_PATH.write_bytes(fernet.encrypt(token_json))
+    else:
+        _TOKEN_PATH.write_bytes(token_json)
+    # Restrict file to owner read/write only
+    _TOKEN_PATH.chmod(0o600)
+
+
+def _read_token() -> "Credentials | None":
+    """Load credentials from disk, decrypting if necessary."""
+    if not _TOKEN_PATH.exists():
+        return None
+    try:
+        data = _TOKEN_PATH.read_bytes()
+        fernet = _get_fernet()
+        if fernet:
+            try:
+                data = fernet.decrypt(data)
+            except Exception:
+                # File may be unencrypted (legacy) — use as-is
+                pass
+        return Credentials.from_authorized_user_json(data.decode(), SCOPES)
+    except Exception:
+        return None
 
 
 # ── OAuth2 Flow ─────────────────────────────────────────────────────────────
@@ -97,8 +155,6 @@ def handle_auth_callback(code: str) -> bool:
     Returns:
         True if credentials were successfully obtained.
     """
-    global _credentials
-
     client_config = _build_client_config()
     flow = Flow.from_client_config(
         client_config,
@@ -106,16 +162,16 @@ def handle_auth_callback(code: str) -> bool:
         redirect_uri=f"{settings.frontend_url}/drive-callback",
     )
     flow.fetch_token(code=code)
-    _credentials = flow.credentials
+    creds = flow.credentials
 
-    # Persist token for session reuse
-    try:
-        _TOKEN_PATH.parent.mkdir(parents=True, exist_ok=True)
-        if _credentials is not None:
-            _TOKEN_PATH.write_text(_credentials.to_json())
-        logger.info("Google Drive token saved")
-    except Exception as e:
-        logger.warning(f"Could not persist Drive token: {e}")
+    with _token_lock:
+        global _credentials
+        _credentials = creds
+        try:
+            _write_token(_credentials)
+            logger.info("Google Drive token saved")
+        except Exception as e:
+            logger.warning(f"Could not persist Drive token: {e}")
 
     logger.info("Google Drive authentication successful")
     return True
@@ -139,19 +195,19 @@ def is_authenticated() -> bool:
             return False
 
     # Try loading from persisted token
-    if _TOKEN_PATH.exists():
-        try:
-            _credentials = Credentials.from_authorized_user_file(
-                str(_TOKEN_PATH), SCOPES
-            )
+    with _token_lock:
+        loaded = _read_token()
+        if loaded is not None:
+            _credentials = loaded
             if _credentials.valid:
                 return True
             if _credentials.expired and _credentials.refresh_token:
-                from google.auth.transport.requests import Request
-                _credentials.refresh(Request())
-                return True
-        except Exception:
-            _credentials = None
+                try:
+                    from google.auth.transport.requests import Request
+                    _credentials.refresh(Request())
+                    return True
+                except Exception:
+                    _credentials = None
 
     return False
 
@@ -159,9 +215,10 @@ def is_authenticated() -> bool:
 def disconnect() -> None:
     """Clear stored credentials."""
     global _credentials
-    _credentials = None
-    if _TOKEN_PATH.exists():
-        _TOKEN_PATH.unlink()
+    with _token_lock:
+        _credentials = None
+        if _TOKEN_PATH.exists():
+            _TOKEN_PATH.unlink()
     logger.info("Google Drive disconnected")
 
 
@@ -253,6 +310,13 @@ def list_files_in_folder(folder_id: str) -> list[dict[str, str]]:
                 })
             else:
                 logger.debug(f"Skipping non-resume file: {name} ({mime})")
+
+        if len(results) >= _MAX_DRIVE_FILES:
+            logger.warning(
+                "Drive folder listing truncated at %d files — folder may contain more resumes.",
+                _MAX_DRIVE_FILES,
+            )
+            break
 
         page_token = response.get("nextPageToken")
         if not page_token:

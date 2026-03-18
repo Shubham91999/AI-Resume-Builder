@@ -24,6 +24,7 @@ export interface ParsedJD {
   key_responsibilities: string[];
   keywords_to_match: string[];
   raw_text: string;
+  created_at?: string;
 }
 
 // --- Resume ---
@@ -69,6 +70,7 @@ export interface ParsedResume {
   education: EducationEntry[];
   certifications: string[];
   raw_text: string;
+  created_at?: string;
 }
 
 // --- Score ---
@@ -153,6 +155,7 @@ export interface TailoredResume {
   skills_removed: string[];
   keywords_used: string[];
   keywords_coverage: number;
+  created_at?: string;
 }
 
 // --- Email ---

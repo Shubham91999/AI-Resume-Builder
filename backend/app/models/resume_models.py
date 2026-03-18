@@ -1,4 +1,5 @@
-from pydantic import BaseModel
+from datetime import datetime
+from pydantic import BaseModel, Field
 from typing import Optional
 
 
@@ -60,6 +61,15 @@ class ParsedResume(BaseModel):
     education: list[EducationEntry] = []
     certifications: list[str] = []
     raw_text: str
+    created_at: datetime = Field(default_factory=datetime.now)
+
+
+class ResumePatch(BaseModel):
+    """Fields that can be manually corrected after LLM parsing."""
+
+    skills: Optional[list[str]] = None
+    summary: Optional[str] = None
+    tagline: Optional[str] = None
 
 
 # ── Project Bank Models ─────────────────────────────────────────────────────

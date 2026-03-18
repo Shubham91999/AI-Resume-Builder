@@ -10,8 +10,10 @@ Responsibilities:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
+from collections import OrderedDict
 from typing import Any
 
 import pdfplumber
@@ -33,8 +35,9 @@ from app.services import vector_store
 
 logger = logging.getLogger(__name__)
 
-# In-memory resume cache (session-scoped, lost on restart — fine for MVP)
-_resume_cache: dict[str, ParsedResume] = {}
+# In-memory resume cache — bounded to avoid unbounded memory growth
+_MAX_CACHE = 200
+_resume_cache: OrderedDict[str, ParsedResume] = OrderedDict()
 
 
 # ── Public API ───────────────────────────────────────────────────────────────
@@ -59,12 +62,12 @@ async def parse_resume(
             logger.info(f"Cache hit for {file_name} (hash={file_hash[:8]})")
             return cached
 
-    # Extract raw text
+    # Extract raw text — run in a thread to avoid blocking the async event loop
     ext = file_name.rsplit(".", 1)[-1].lower() if "." in file_name else ""
     if ext == "pdf":
-        raw_text = _extract_pdf_text(file_bytes)
+        raw_text = await asyncio.to_thread(_extract_pdf_text, file_bytes)
     elif ext in ("docx", "doc"):
-        raw_text = _extract_docx_text(file_bytes)
+        raw_text = await asyncio.to_thread(_extract_docx_text, file_bytes)
     else:
         raise ValueError(f"Unsupported file type: .{ext}. Please upload PDF or DOCX.")
 
@@ -103,6 +106,8 @@ async def parse_resume(
     )
 
     _resume_cache[parsed.id] = parsed
+    if len(_resume_cache) > _MAX_CACHE:
+        _resume_cache.popitem(last=False)  # evict oldest
     logger.info(f"Parsed resume: id={parsed.id} name={parsed.name} skills={len(parsed.skills)}")
 
     # Store embedding in vector store for semantic search
@@ -148,6 +153,16 @@ def clear_cached_resumes() -> int:
     count = len(_resume_cache)
     _resume_cache.clear()
     return count
+
+
+def update_cached_resume(resume_id: str, patch: dict) -> "ParsedResume | None":
+    """Apply a partial update to a cached resume. Returns the updated resume or None if not found."""
+    resume = _resume_cache.get(resume_id)
+    if resume is None:
+        return None
+    updated = resume.model_copy(update={k: v for k, v in patch.items() if v is not None})
+    _resume_cache[resume_id] = updated
+    return updated
 
 
 # ── Text Extraction ──────────────────────────────────────────────────────────

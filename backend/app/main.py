@@ -1,4 +1,6 @@
-from fastapi import FastAPI
+import logging
+
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
@@ -12,6 +14,8 @@ from app.api import (
     project_routes,
 )
 
+logger = logging.getLogger(__name__)
+
 app = FastAPI(
     title=settings.app_name,
     version="0.1.0",
@@ -20,13 +24,49 @@ app = FastAPI(
 
 # ── CORS ────────────────────────────────────────────────────────────────────
 
+_ALLOWED_METHODS = ["GET", "POST", "DELETE"]
+_ALLOWED_HEADERS = [
+    "Content-Type",
+    "Authorization",
+    "X-Provider",
+    "X-Model-Key",
+    "X-Groq-Key",
+    "X-Google-Key",
+    "X-OpenRouter-Key",
+]
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[settings.frontend_url],
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["*"] if settings.debug else _ALLOWED_METHODS,
+    allow_headers=["*"] if settings.debug else _ALLOWED_HEADERS,
 )
+
+# ── Security Headers (production only) ─────────────────────────────────────
+
+
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next) -> Response:
+    response = await call_next(request)
+    if not settings.debug:
+        response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+    return response
+
+
+# ── Startup warning ─────────────────────────────────────────────────────────
+
+
+@app.on_event("startup")
+async def _startup_checks() -> None:
+    if not settings.debug:
+        logger.warning(
+            "Running in PRODUCTION mode. Ensure the server is behind an HTTPS "
+            "reverse proxy — API keys are transmitted in request headers and must "
+            "be protected by TLS."
+        )
 
 # ── Routers ─────────────────────────────────────────────────────────────────
 

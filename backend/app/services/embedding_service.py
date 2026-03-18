@@ -11,12 +11,21 @@ Provides cosine similarity comparisons for:
 from __future__ import annotations
 
 import logging
+from collections import OrderedDict
 from functools import lru_cache
 from typing import Sequence
 
 import numpy as np
 
 logger = logging.getLogger(__name__)
+
+# ── Embedding Cache ───────────────────────────────────────────────────────────
+# Avoids recomputing embeddings for repeated strings (e.g. the same JD text
+# when scoring N resumes against the same JD).
+
+_EMBED_CACHE_MAX = 256
+_embed_cache: OrderedDict[str, np.ndarray | None] = OrderedDict()
+
 
 # ── Model Loading (lazy singleton) ───────────────────────────────────────────
 
@@ -49,14 +58,25 @@ def _get_model():
 def embed_text(text: str) -> np.ndarray | None:
     """
     Generate a 384-dim embedding for a single text string.
+    Results are cached (up to 256 entries) to avoid recomputing embeddings
+    for the same text across multiple scoring calls.
     Returns None if the model isn't available.
     """
+    if text in _embed_cache:
+        _embed_cache.move_to_end(text)  # LRU: refresh access order
+        return _embed_cache[text]
+
     model = _get_model()
     if model is None:
+        _embed_cache[text] = None
         return None
     try:
         embedding = model.encode(text, normalize_embeddings=True)
-        return np.array(embedding, dtype=np.float32)
+        result = np.array(embedding, dtype=np.float32)
+        _embed_cache[text] = result
+        if len(_embed_cache) > _EMBED_CACHE_MAX:
+            _embed_cache.popitem(last=False)  # evict LRU entry
+        return result
     except Exception as e:
         logger.error(f"Embedding failed: {e}")
         return None

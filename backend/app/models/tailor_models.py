@@ -1,4 +1,5 @@
-from pydantic import BaseModel
+from datetime import datetime
+from pydantic import BaseModel, Field
 from typing import Optional
 
 
@@ -73,6 +74,7 @@ class TailoredResume(BaseModel):
     skills_removed: list[str]
     keywords_used: list[str] = []  # JD keywords found in tailored resume
     keywords_coverage: float  # percentage of JD keywords present
+    created_at: datetime = Field(default_factory=datetime.now)
 
 
 # ── Request Models ──────────────────────────────────────────────────────────

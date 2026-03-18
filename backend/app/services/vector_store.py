@@ -172,10 +172,15 @@ def query_resumes(
     if query_emb is None:
         return []
 
+    count = collection.count()
+    if count == 0:
+        return []
+    actual_n = min(n_results, count)
+
     try:
         results = collection.query(
             query_embeddings=[query_emb.tolist()],
-            n_results=n_results,
+            n_results=actual_n,
             where={"is_section": {"$ne": "true"}} if _has_section_entries(collection) else None,
         )
     except Exception:
@@ -183,7 +188,7 @@ def query_resumes(
         try:
             results = collection.query(
                 query_embeddings=[query_emb.tolist()],
-                n_results=n_results,
+                n_results=actual_n,
             )
         except Exception as e:
             logger.error(f"ChromaDB query failed: {e}")
@@ -300,10 +305,16 @@ def query_projects(
     query_emb = embed_text(jd_text)
     if query_emb is None:
         return []
+
+    count = collection.count()
+    if count == 0:
+        return []
+    actual_n = min(n_results, count)
+
     try:
         results = collection.query(
             query_embeddings=[query_emb.tolist()],
-            n_results=n_results,
+            n_results=actual_n,
         )
     except Exception as e:
         logger.error(f"Project query failed: {e}")
