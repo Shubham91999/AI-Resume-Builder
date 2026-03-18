@@ -1,4 +1,6 @@
 import axios from "axios";
+import type { TailorRequest, TailoredResume, TailorProgress } from "@/types";
+import { STORAGE_KEY_API_KEYS } from "@/constants/providers";
 
 const API_BASE = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
 
@@ -12,7 +14,7 @@ export const api = axios.create({
 api.interceptors.request.use((config) => {
   try {
     const keys: Record<string, string> = JSON.parse(
-      localStorage.getItem("art_api_keys") ?? "{}"
+      localStorage.getItem(STORAGE_KEY_API_KEYS) ?? "{}"
     );
     if (keys.groq) config.headers["X-Groq-Key"] = keys.groq;
     if (keys.google) config.headers["X-Google-Key"] = keys.google;
@@ -87,6 +89,65 @@ export const tailorResume = (payload: {
   model_key: string;
 }) => api.post("/tailor/", payload, { timeout: 300_000 }).then((r) => r.data);
 
+/** Stream tailor progress via SSE (uses fetch + ReadableStream to support custom headers). */
+export async function streamTailorResume(
+  payload: TailorRequest,
+  onProgress: (event: TailorProgress) => void,
+  onDone: (result: TailoredResume) => void,
+  onError: (message: string) => void,
+): Promise<void> {
+  let keys: Record<string, string> = {};
+  try { keys = JSON.parse(localStorage.getItem(STORAGE_KEY_API_KEYS) ?? "{}"); } catch {}
+
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (keys.groq) headers["X-Groq-Key"] = keys.groq;
+  if (keys.google) headers["X-Google-Key"] = keys.google;
+  if (keys.openrouter) headers["X-OpenRouter-Key"] = keys.openrouter;
+
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}/api/tailor/stream`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(payload),
+    });
+  } catch (e) {
+    onError(e instanceof Error ? e.message : "Network error");
+    return;
+  }
+
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({ detail: "Request failed" }));
+    onError(err.detail ?? "Tailoring request failed");
+    return;
+  }
+
+  const reader = response.body!.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    // Split on double-newline (SSE event boundary)
+    const events = buffer.split("\n\n");
+    buffer = events.pop() ?? "";
+
+    for (const chunk of events) {
+      const dataLine = chunk.trim();
+      if (!dataLine.startsWith("data: ")) continue;
+      try {
+        const event = JSON.parse(dataLine.slice(6));
+        if (event.type === "progress") onProgress(event as TailorProgress);
+        else if (event.type === "done") onDone(event.result as TailoredResume);
+        else if (event.type === "error") onError(event.message ?? "Tailoring failed");
+      } catch { /* ignore malformed events */ }
+    }
+  }
+}
+
 export const getTailoredResume = (id: string) =>
   api.get(`/tailor/${id}`).then((r) => r.data);
 
@@ -113,6 +174,9 @@ export const downloadPdf = (id: string) =>
 export const downloadZip = (id: string) =>
   api.get(`/download/${id}/zip`, { responseType: "blob" }).then((r) => r.data);
 
+export const downloadTxt = (id: string) =>
+  api.get(`/download/${id}/txt`, { responseType: "blob" }).then((r) => r.data);
+
 // ---- LLM ----
 export const getLLMProviders = () =>
   api.get("/llm/providers").then((r) => r.data);
@@ -136,8 +200,28 @@ export const deleteProject = (id: string) =>
 export const selectProjectsForJD = (jdId: string, topN: number = 2) =>
   api.post(`/projects/select?jd_id=${encodeURIComponent(jdId)}&top_n=${topN}`).then((r) => r.data);
 
+export const rewriteProjectBullets = (
+  projectId: string,
+  jdId: string,
+  provider: string,
+  modelKey: string
+) =>
+  api.post(
+    `/projects/rewrite-bullets?project_id=${encodeURIComponent(projectId)}&jd_id=${encodeURIComponent(jdId)}&provider=${encodeURIComponent(provider)}&model_key=${encodeURIComponent(modelKey)}`
+  ).then((r) => r.data);
+
 export const getCachedTailored = () =>
   api.get("/tailor/cache").then((r) => r.data);
+
+export const patchJD = (
+  id: string,
+  patch: Partial<{ job_title: string; company: string; location: string; required_skills: string[]; preferred_skills: string[]; keywords_to_match: string[]; required_experience_years: number }>
+) => api.patch(`/jd/cache/${id}`, patch).then((r) => r.data);
+
+export const patchResume = (
+  id: string,
+  patch: Partial<{ skills: string[]; summary: string; tagline: string }>
+) => api.patch(`/resumes/cache/${id}`, patch).then((r) => r.data);
 
 export const getScoreComparison = (tailorId: string) =>
   api.get(`/tailor/${tailorId}/score-comparison`).then((r) => r.data);

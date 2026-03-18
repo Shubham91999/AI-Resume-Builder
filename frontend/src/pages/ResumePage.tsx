@@ -8,23 +8,13 @@ import {
   disconnectDrive,
   listDriveFiles,
   importFromDrive,
+  patchResume,
 } from "@/services/api";
 import type { ParsedResume, DriveFile } from "@/types";
 import { useToast } from "@/components/Toast";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
-
-// ── Helper: get selected model from localStorage ────────────────────────────
-function getSelectedModel(): { provider: string; model_key: string } | null {
-  try {
-    const raw = localStorage.getItem("art_selected_model");
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    if (parsed?.provider && parsed?.model_key) return parsed;
-    return null;
-  } catch {
-    return null;
-  }
-}
+import { formatRelativeTime } from "@/lib/utils";
+import { getSelectedModel } from "@/constants/providers";
 
 // ── Main Page ───────────────────────────────────────────────────────────────
 export default function ResumePage() {
@@ -506,6 +496,26 @@ function ResumeCard({
   expanded: boolean;
   onToggle: () => void;
 }) {
+  const [editingSkills, setEditingSkills] = useState(false);
+  const [skillsDraft, setSkillsDraft] = useState(resume.skills.join(", "));
+  const [savingSkills, setSavingSkills] = useState(false);
+  const { toast } = useToast();
+
+  const handleSaveSkills = async () => {
+    setSavingSkills(true);
+    try {
+      const newSkills = skillsDraft.split(",").map((s) => s.trim()).filter(Boolean);
+      await patchResume(resume.id, { skills: newSkills });
+      resume.skills = newSkills; // mutate local copy to reflect change
+      setEditingSkills(false);
+      toast("success", "Skills updated");
+    } catch {
+      toast("error", "Failed to save skills");
+    } finally {
+      setSavingSkills(false);
+    }
+  };
+
   return (
     <div className="bg-zinc-800/50 border border-zinc-700 rounded-xl overflow-hidden">
       {/* Header — always visible */}
@@ -520,6 +530,7 @@ function ResumeCard({
               <h3 className="font-semibold text-zinc-200">{resume.name}</h3>
               <p className="text-xs text-zinc-500 truncate">
                 {resume.file_name} • {resume.skills.length} skills • {resume.experience.length} roles
+                {resume.created_at && <span> • {formatRelativeTime(resume.created_at)}</span>}
               </p>
             </div>
           </div>
@@ -559,16 +570,41 @@ function ResumeCard({
           {/* Skills */}
           {resume.skills.length > 0 && (
             <Section title="Skills">
-              <div className="flex flex-wrap gap-1.5">
-                {resume.skills.map((skill, i) => (
-                  <span
-                    key={i}
-                    className="px-2 py-0.5 bg-blue-500/15 text-blue-300 rounded text-xs"
-                  >
-                    {skill}
-                  </span>
-                ))}
-              </div>
+              {editingSkills ? (
+                <div className="space-y-2">
+                  <textarea
+                    value={skillsDraft}
+                    onChange={(e) => setSkillsDraft(e.target.value)}
+                    rows={3}
+                    className="w-full rounded-md border border-zinc-600 bg-zinc-800 px-3 py-2 text-sm text-zinc-200 focus:outline-none focus:border-blue-500 resize-none"
+                    placeholder="Comma-separated skills..."
+                  />
+                  <div className="flex gap-2">
+                    <button onClick={handleSaveSkills} disabled={savingSkills}
+                      className="bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white px-3 py-1.5 rounded text-xs font-medium transition-colors">
+                      {savingSkills ? "Saving..." : "Save"}
+                    </button>
+                    <button onClick={() => { setSkillsDraft(resume.skills.join(", ")); setEditingSkills(false); }}
+                      className="border border-zinc-600 text-zinc-400 hover:text-zinc-200 px-3 py-1.5 rounded text-xs font-medium transition-colors">
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {resume.skills.map((skill, i) => (
+                      <span key={i} className="px-2 py-0.5 bg-blue-500/15 text-blue-300 rounded text-xs">
+                        {skill}
+                      </span>
+                    ))}
+                  </div>
+                  <button onClick={() => { setSkillsDraft(resume.skills.join(", ")); setEditingSkills(true); }}
+                    className="mt-2 text-xs text-zinc-600 hover:text-zinc-400 transition-colors">
+                    ✏️ Edit skills
+                  </button>
+                </div>
+              )}
             </Section>
           )}
 

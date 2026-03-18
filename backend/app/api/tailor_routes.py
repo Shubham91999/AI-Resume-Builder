@@ -1,4 +1,8 @@
+import asyncio
+import json
+
 from fastapi import APIRouter, HTTPException, Depends
+from fastapi.responses import StreamingResponse
 
 from app.models.tailor_models import TailorRequest, TailoredResume
 from app.models.score_models import ScoreComparison
@@ -11,7 +15,8 @@ from app.services.jd_service import get_cached_jd
 from app.services.resume_service import get_cached_resume
 from app.services.ats_scorer import score_resume
 from app.services.output_packager import build_score_comparison
-from app.utils.dependencies import APIKeys, get_api_keys
+from app.utils.dependencies import APIKeys, get_api_keys, not_found_error
+from app.config import DEFAULT_PROVIDER, DEFAULT_MODEL_KEY
 from app.models.resume_models import (
     ParsedResume,
     ContactInfo,
@@ -43,14 +48,14 @@ async def tailor_resume_endpoint(
     # Resolve JD and resume from cache
     jd = get_cached_jd(req.jd_id)
     if not jd:
-        raise HTTPException(status_code=404, detail=f"JD '{req.jd_id}' not found. Parse a JD first.")
+        raise not_found_error("JD", req.jd_id)
 
     resume = get_cached_resume(req.resume_id)
     if not resume:
-        raise HTTPException(status_code=404, detail=f"Resume '{req.resume_id}' not found. Upload a resume first.")
+        raise not_found_error("Resume", req.resume_id)
 
-    provider = req.provider or "groq"
-    model_key = req.model_key or "llama-3.3-70b"
+    provider = req.provider or DEFAULT_PROVIDER
+    model_key = req.model_key or DEFAULT_MODEL_KEY
     key = _resolve_key(api_keys, provider)
 
     try:
@@ -69,6 +74,82 @@ async def tailor_resume_endpoint(
         )
 
 
+@router.post("/stream")
+async def stream_tailor_endpoint(
+    req: TailorRequest,
+    api_keys: APIKeys = Depends(get_api_keys),
+):
+    """Tailor a resume with real-time step-by-step progress via Server-Sent Events.
+
+    Each SSE event is a JSON object:
+      {"type": "progress", "step": "...", "step_number": N, "total_steps": N, "status": "..."}
+      {"type": "done",     "result": { ...TailoredResume... }}
+      {"type": "error",    "message": "..."}
+      {"type": "heartbeat"}
+    """
+    jd = get_cached_jd(req.jd_id)
+    if not jd:
+        raise not_found_error("JD", req.jd_id)
+
+    resume = get_cached_resume(req.resume_id)
+    if not resume:
+        raise not_found_error("Resume", req.resume_id)
+
+    provider = req.provider or DEFAULT_PROVIDER
+    model_key = req.model_key or DEFAULT_MODEL_KEY
+    key = _resolve_key(api_keys, provider)
+
+    queue: asyncio.Queue = asyncio.Queue()
+
+    async def _progress_callback(step: str, step_num: int, total: int, status: str, message=None):
+        await queue.put({
+            "type": "progress",
+            "step": step,
+            "step_number": step_num,
+            "total_steps": total,
+            "status": status,
+            "message": message,
+        })
+
+    async def _run_tailoring():
+        try:
+            result = await tailor_resume(
+                jd=jd,
+                resume=resume,
+                provider=provider,
+                model_key=model_key,
+                api_key=key,
+                progress_callback=_progress_callback,
+            )
+            await queue.put({"type": "done", "result": result.model_dump(mode="json")})
+        except Exception as e:
+            await queue.put({"type": "error", "message": str(e)})
+
+    async def event_generator():
+        task = asyncio.create_task(_run_tailoring())
+        try:
+            while True:
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=30.0)
+                    yield f"data: {json.dumps(event)}\n\n"
+                    if event["type"] in ("done", "error"):
+                        break
+                except asyncio.TimeoutError:
+                    yield 'data: {"type":"heartbeat"}\n\n'
+        finally:
+            task.cancel()
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @router.get("/cache", response_model=list[TailoredResume])
 async def list_tailored():
     """List all cached tailored resumes."""
@@ -80,7 +161,7 @@ async def get_tailored_resume(tailor_id: str):
     """Get a tailored resume by ID."""
     result = get_cached_tailored(tailor_id)
     if not result:
-        raise HTTPException(status_code=404, detail=f"Tailored resume '{tailor_id}' not found")
+        raise not_found_error("Tailored resume", tailor_id)
     return result
 
 
@@ -93,15 +174,15 @@ async def get_score_comparison(tailor_id: str):
     """
     tailored = get_cached_tailored(tailor_id)
     if not tailored:
-        raise HTTPException(status_code=404, detail=f"Tailored resume '{tailor_id}' not found")
+        raise not_found_error("Tailored resume", tailor_id)
 
     jd = get_cached_jd(tailored.jd_id)
     if not jd:
-        raise HTTPException(status_code=404, detail="Original JD no longer in cache")
+        raise not_found_error("JD", tailored.jd_id)
 
     original = get_cached_resume(tailored.original_resume_id)
     if not original:
-        raise HTTPException(status_code=404, detail="Original resume no longer in cache")
+        raise not_found_error("Resume", tailored.original_resume_id)
 
     # Score original resume
     before_score = score_resume(jd, original)

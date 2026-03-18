@@ -7,11 +7,13 @@ import {
   updateProject,
   selectProjectsForJD,
   getCachedJDs,
+  rewriteProjectBullets,
 } from "@/services/api";
 import type { ProjectBankEntry, SelectedProject, ParsedJD } from "@/types";
-import { Loader2, Pencil, Trash2 } from "lucide-react";
+import { Loader2, Pencil, Trash2, Wand2 } from "lucide-react";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { useToast } from "@/components/Toast";
+import { getSelectedModel } from "@/constants/providers";
 
 export default function ProjectsPage() {
   const navigate = useNavigate();
@@ -186,7 +188,7 @@ export default function ProjectsPage() {
       ) : (
         <div className="space-y-3">
           {projects.map((proj) => (
-            <ProjectCard key={proj.id} project={proj} onDelete={(id) => handleDelete(id, proj.name)} onUpdate={(id, data) => handleUpdate(id, proj.name, data)} />
+            <ProjectCard key={proj.id} project={proj} jds={jds} onDelete={(id) => handleDelete(id, proj.name)} onUpdate={(id, data) => handleUpdate(id, proj.name, data)} />
           ))}
         </div>
       )}
@@ -257,19 +259,28 @@ export default function ProjectsPage() {
 // ── Project Card ────────────────────────────────────────────────────────────
 function ProjectCard({
   project,
+  jds,
   onDelete,
   onUpdate,
 }: {
   project: ProjectBankEntry;
+  jds: ParsedJD[];
   onDelete: (id: string) => void;
   onUpdate: (id: string, data: { name?: string; bullets?: string[]; skills?: string[] }) => void;
 }) {
+  const { toast } = useToast();
   const [expanded, setExpanded] = useState(false);
   const [editing, setEditing] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [editName, setEditName] = useState(project.name);
   const [editBullets, setEditBullets] = useState(project.bullets.join("\n"));
   const [editSkills, setEditSkills] = useState(project.skills.join(", "));
+
+  // Rewrite state
+  const [showRewrite, setShowRewrite] = useState(false);
+  const [rewriteJdId, setRewriteJdId] = useState<string>(jds[jds.length - 1]?.id ?? "");
+  const [rewriting, setRewriting] = useState(false);
+  const [rewriteResult, setRewriteResult] = useState<{ original_bullets: string[]; rewritten_bullets: string[]; keywords_used: string[] } | null>(null);
 
   const handleSave = () => {
     onUpdate(project.id, {
@@ -291,6 +302,30 @@ function ProjectCard({
     setEditBullets(project.bullets.join("\n"));
     setEditSkills(project.skills.join(", "));
     setEditing(false);
+  };
+
+  const handleRewrite = async () => {
+    const model = getSelectedModel();
+    if (!model) { toast("error", "Select a model in Settings first"); return; }
+    if (!rewriteJdId) { toast("error", "Select a JD first"); return; }
+    setRewriting(true);
+    setRewriteResult(null);
+    try {
+      const result = await rewriteProjectBullets(project.id, rewriteJdId, model.provider, model.model_key);
+      setRewriteResult(result);
+    } catch {
+      toast("error", "Rewrite failed. Check your API key and try again.");
+    } finally {
+      setRewriting(false);
+    }
+  };
+
+  const handleAcceptRewrite = () => {
+    if (!rewriteResult) return;
+    onUpdate(project.id, { bullets: rewriteResult.rewritten_bullets });
+    setRewriteResult(null);
+    setShowRewrite(false);
+    toast("success", "Bullets updated with rewritten version");
   };
 
   if (editing) {
@@ -362,6 +397,15 @@ function ProjectCard({
           </div>
         </button>
         <div className="flex gap-1 ml-2">
+          {jds.length > 0 && (
+            <button
+              onClick={() => { setShowRewrite(!showRewrite); setRewriteResult(null); }}
+              className={`p-1.5 rounded-md transition-colors text-zinc-600 ${showRewrite ? "bg-purple-500/20 text-purple-400" : "hover:text-purple-400 hover:bg-purple-400/10"}`}
+              title="Rewrite bullets for JD"
+            >
+              <Wand2 className="h-3.5 w-3.5" />
+            </button>
+          )}
           <button
             onClick={() => setEditing(true)}
             className="text-zinc-600 hover:text-blue-400 p-1.5 rounded-md hover:bg-blue-400/10 transition-colors"
@@ -399,6 +443,76 @@ function ProjectCard({
             </li>
           ))}
         </ul>
+      )}
+
+      {/* Rewrite panel */}
+      {showRewrite && (
+        <div className="mt-3 border-t border-zinc-700/50 pt-3 space-y-3">
+          <div className="flex items-center gap-2">
+            <label className="text-xs text-zinc-400 shrink-0">Rewrite for JD:</label>
+            <select
+              value={rewriteJdId}
+              onChange={(e) => setRewriteJdId(e.target.value)}
+              className="flex-1 bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs text-zinc-200"
+            >
+              {jds.map((jd) => (
+                <option key={jd.id} value={jd.id}>{jd.job_title} @ {jd.company}</option>
+              ))}
+            </select>
+            <button
+              onClick={handleRewrite}
+              disabled={rewriting || !rewriteJdId}
+              className="flex items-center gap-1 bg-purple-600 hover:bg-purple-500 disabled:bg-zinc-700 text-white px-3 py-1 rounded text-xs font-medium transition-colors"
+            >
+              {rewriting ? <><Loader2 className="h-3 w-3 animate-spin" /> Rewriting…</> : "Rewrite"}
+            </button>
+          </div>
+
+          {rewriteResult && (
+            <div className="space-y-2">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <p className="text-[10px] font-medium text-zinc-500 mb-1">Original</p>
+                  <ul className="space-y-1">
+                    {rewriteResult.original_bullets.map((b, i) => (
+                      <li key={i} className="text-xs text-zinc-500 flex"><span className="mr-1">•</span>{b}</li>
+                    ))}
+                  </ul>
+                </div>
+                <div>
+                  <p className="text-[10px] font-medium text-purple-400 mb-1">Rewritten</p>
+                  <ul className="space-y-1">
+                    {rewriteResult.rewritten_bullets.map((b, i) => (
+                      <li key={i} className="text-xs text-zinc-200 flex"><span className="mr-1">•</span>{b}</li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+              {rewriteResult.keywords_used.length > 0 && (
+                <div className="flex flex-wrap gap-1">
+                  <span className="text-[10px] text-zinc-500">Keywords added:</span>
+                  {rewriteResult.keywords_used.map((kw, i) => (
+                    <span key={i} className="px-1.5 py-0.5 bg-purple-500/10 text-purple-300 rounded text-[10px]">{kw}</span>
+                  ))}
+                </div>
+              )}
+              <div className="flex gap-2 pt-1">
+                <button
+                  onClick={handleAcceptRewrite}
+                  className="bg-green-600 hover:bg-green-500 text-white px-3 py-1 rounded text-xs font-medium transition-colors"
+                >
+                  Accept
+                </button>
+                <button
+                  onClick={() => setRewriteResult(null)}
+                  className="text-zinc-400 hover:text-zinc-200 px-3 py-1 text-xs transition-colors"
+                >
+                  Reject
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
       )}
     </div>
   );

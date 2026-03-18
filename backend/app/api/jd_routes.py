@@ -1,8 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException
 
-from app.models.jd_models import JDUrlInput, JDTextInput, ParsedJD
-from app.services.jd_service import parse_jd_text, parse_jd_url, get_cached_jd, list_cached_jds
-from app.utils.dependencies import APIKeys, get_api_keys
+from app.models.jd_models import JDUrlInput, JDTextInput, JDPatch, ParsedJD
+from app.services.jd_service import parse_jd_text, parse_jd_url, get_cached_jd, list_cached_jds, update_cached_jd
+from app.utils.dependencies import APIKeys, get_api_keys, not_found_error
 
 router = APIRouter()
 
@@ -64,5 +64,14 @@ async def get_jd(jd_id: str):
     """Retrieve a specific parsed JD by ID."""
     jd = get_cached_jd(jd_id)
     if not jd:
-        raise HTTPException(status_code=404, detail="JD not found")
+        raise not_found_error("JD", jd_id)
     return jd
+
+
+@router.patch("/cache/{jd_id}", response_model=ParsedJD)
+async def patch_jd(jd_id: str, patch: JDPatch):
+    """Manually correct fields on a cached parsed JD."""
+    updated = update_cached_jd(jd_id, patch.model_dump(exclude_none=True))
+    if not updated:
+        raise not_found_error("JD", jd_id)
+    return updated

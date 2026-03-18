@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import {
-  tailorResume,
+  streamTailorResume,
   getCachedJDs,
   getCachedResumes,
   rankResumes,
@@ -13,25 +13,22 @@ import type {
   ParsedResume,
   RankingResponse,
 } from "@/types";
-import { Loader2, CheckCircle2, Circle, XCircle, Sparkles } from "lucide-react";
+import { Loader2, CheckCircle2, Circle, XCircle, Sparkles, ListChecks } from "lucide-react";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { useToast } from "@/components/Toast";
-
-function getSelectedModel(): { provider: string; model_key: string } | null {
-  try {
-    const raw = localStorage.getItem("art_selected_model");
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    if (parsed?.provider && parsed?.model_key) return parsed;
-    return null;
-  } catch {
-    return null;
-  }
-}
+import { getSelectedModel } from "@/constants/providers";
 
 type PipelineStep = {
   label: string;
   status: "pending" | "active" | "done" | "error";
+};
+
+type BatchJob = {
+  jdId: string;
+  jdLabel: string;
+  status: "pending" | "running" | "done" | "error";
+  coverage?: number;
+  errorMsg?: string;
 };
 
 export default function TailorPage() {
@@ -89,59 +86,99 @@ export default function TailorPage() {
     setError(null);
     setLoading(true);
     setTailored(null);
+    setSteps([]);
 
-    // Build pipeline steps (we don't know exact count, estimate)
-    const resume = resumes.find((r) => r.id === topResumeId);
-    const expCount = resume?.experience.length ?? 2;
-    const pipelineSteps: PipelineStep[] = [
-      { label: "Tailoring tagline", status: "active" },
-      { label: "Rewriting summary", status: "pending" },
-      { label: "Optimizing skills", status: "pending" },
-      ...Array.from({ length: expCount }, (_, i) => ({
-        label: `Rewriting experience #${i + 1}`,
-        status: "pending" as const,
-      })),
-    ];
-    setSteps(pipelineSteps);
+    await streamTailorResume(
+      { jd_id: selectedJdId, resume_id: topResumeId, provider: model.provider, model_key: model.model_key },
+      // onProgress — update step list from real backend events
+      (event) => {
+        setSteps((prev) => {
+          const idx = event.step_number - 1;
+          // Grow the array to fit if needed
+          const next: PipelineStep[] = prev.length >= event.total_steps
+            ? [...prev]
+            : Array.from({ length: event.total_steps }, (_, i) =>
+                prev[i] ?? { label: "", status: "pending" as const }
+              );
+          next[idx] = {
+            label: event.step,
+            status: event.status === "completed" ? "done"
+                  : event.status === "failed"    ? "error"
+                  : "active",
+          };
+          return next;
+        });
+      },
+      // onDone
+      (result) => {
+        setSteps((prev) => prev.map((s) => ({ ...s, status: s.status === "error" ? "error" : "done" })));
+        setTailored(result);
+        setLoading(false);
+        toast("success", `Resume tailored — ${result.keywords_coverage}% keyword coverage`);
+      },
+      // onError
+      (message) => {
+        setSteps((prev) => prev.map((s) => (s.status === "active" ? { ...s, status: "error" } : s)));
+        setError(message ?? "Tailoring failed. Check your API key and try again.");
+        setLoading(false);
+      },
+    );
+  };
 
-    // Simulate step progression with timers (actual call is blocking)
-    let currentStep = 0;
-    const stepInterval = setInterval(() => {
-      currentStep++;
-      if (currentStep < pipelineSteps.length) {
-        setSteps((prev) =>
-          prev.map((s, i) => ({
-            ...s,
-            status: i < currentStep ? "done" : i === currentStep ? "active" : "pending",
-          }))
+  // Batch tailoring state
+  const [batchMode, setBatchMode] = useState(false);
+  const [batchSelectedIds, setBatchSelectedIds] = useState<Set<string>>(new Set());
+  const [batchJobs, setBatchJobs] = useState<BatchJob[]>([]);
+  const [batchRunning, setBatchRunning] = useState(false);
+
+  const toggleBatchJd = (jdId: string) => {
+    setBatchSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(jdId)) next.delete(jdId);
+      else next.add(jdId);
+      return next;
+    });
+  };
+
+  const startBatchTailoring = async () => {
+    if (!topResumeId || batchSelectedIds.size === 0) return;
+    const model = getSelectedModel();
+    if (!model) { setError("Please select a model in Settings first."); return; }
+
+    const jobs: BatchJob[] = [...batchSelectedIds].map((jdId) => {
+      const jd = jds.find((j) => j.id === jdId);
+      return { jdId, jdLabel: jd ? `${jd.job_title} @ ${jd.company}` : jdId.slice(0, 8), status: "pending" };
+    });
+    setBatchJobs(jobs);
+    setBatchRunning(true);
+    setError(null);
+
+    for (let i = 0; i < jobs.length; i++) {
+      const job = jobs[i];
+      setBatchJobs((prev) => prev.map((j, idx) => idx === i ? { ...j, status: "running" } : j));
+
+      await new Promise<void>((resolve) => {
+        streamTailorResume(
+          { jd_id: job.jdId, resume_id: topResumeId, provider: model.provider, model_key: model.model_key },
+          () => {}, // ignore per-step progress in batch mode
+          (result) => {
+            setBatchJobs((prev) => prev.map((j, idx) =>
+              idx === i ? { ...j, status: "done", coverage: result.keywords_coverage } : j
+            ));
+            resolve();
+          },
+          (msg) => {
+            setBatchJobs((prev) => prev.map((j, idx) =>
+              idx === i ? { ...j, status: "error", errorMsg: msg } : j
+            ));
+            resolve();
+          },
         );
-      }
-    }, 8000); // ~8s per step estimate
-
-    try {
-      const result = await tailorResume({
-        jd_id: selectedJdId,
-        resume_id: topResumeId,
-        provider: model.provider,
-        model_key: model.model_key,
       });
-      clearInterval(stepInterval);
-      setSteps((prev) => prev.map((s) => ({ ...s, status: "done" })));
-      setTailored(result);
-      toast("success", `Resume tailored — ${result.keywords_coverage}% keyword coverage`);
-    } catch (err: unknown) {
-      clearInterval(stepInterval);
-      setSteps((prev) =>
-        prev.map((s) => (s.status === "active" ? { ...s, status: "error" } : s))
-      );
-      const detail =
-        typeof err === "object" && err !== null && "response" in err
-          ? (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
-          : null;
-      setError(detail ?? "Tailoring failed. Check your API key and try again.");
-    } finally {
-      setLoading(false);
     }
+
+    setBatchRunning(false);
+    toast("success", `Batch tailoring complete — ${jobs.length} JD${jobs.length > 1 ? "s" : ""} processed`);
   };
 
   const hasData = jds.length > 0 && resumes.length > 0;
@@ -169,8 +206,26 @@ export default function TailorPage() {
         <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4 text-red-400">{error}</div>
       )}
 
-      {/* Start button */}
-      {ready && hasData && !tailored && !loading && (
+      {/* Mode toggle */}
+      {ready && hasData && !tailored && !loading && !batchRunning && batchJobs.length === 0 && jds.length > 1 && (
+        <div className="flex gap-2">
+          <button
+            onClick={() => setBatchMode(false)}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${!batchMode ? "bg-blue-600 text-white" : "bg-zinc-800 text-zinc-400 hover:text-zinc-200"}`}
+          >
+            <Sparkles className="h-3.5 w-3.5" /> Single JD
+          </button>
+          <button
+            onClick={() => { setBatchMode(true); setBatchSelectedIds(new Set(jds.map((j) => j.id))); }}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${batchMode ? "bg-blue-600 text-white" : "bg-zinc-800 text-zinc-400 hover:text-zinc-200"}`}
+          >
+            <ListChecks className="h-3.5 w-3.5" /> Batch Tailor
+          </button>
+        </div>
+      )}
+
+      {/* Start button — single mode */}
+      {ready && hasData && !tailored && !loading && !batchMode && !batchRunning && batchJobs.length === 0 && (
         <div className="bg-zinc-800/50 border border-zinc-700 rounded-xl p-6 text-center space-y-4">
           <Sparkles className="h-10 w-10 text-blue-400 mx-auto" />
           <div>
@@ -186,6 +241,82 @@ export default function TailorPage() {
           >
             Start Tailoring
           </button>
+        </div>
+      )}
+
+      {/* Batch mode UI */}
+      {ready && hasData && !loading && batchMode && batchJobs.length === 0 && (
+        <div className="bg-zinc-800/50 border border-zinc-700 rounded-xl p-6 space-y-4">
+          <div className="flex items-center gap-2">
+            <ListChecks className="h-5 w-5 text-blue-400" />
+            <h3 className="font-semibold text-zinc-200">Batch Tailor</h3>
+          </div>
+          <p className="text-sm text-zinc-400">Select JDs to tailor your top resume against each one:</p>
+          <div className="space-y-2">
+            {jds.map((jd) => (
+              <label key={jd.id} className="flex items-center gap-2 cursor-pointer group">
+                <input
+                  type="checkbox"
+                  checked={batchSelectedIds.has(jd.id)}
+                  onChange={() => toggleBatchJd(jd.id)}
+                  className="accent-blue-500"
+                />
+                <span className="text-sm text-zinc-300 group-hover:text-zinc-100">{jd.job_title} @ {jd.company}</span>
+              </label>
+            ))}
+          </div>
+          <button
+            onClick={startBatchTailoring}
+            disabled={batchSelectedIds.size === 0}
+            className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 disabled:bg-zinc-700 text-white px-6 py-2.5 rounded-lg font-medium transition-colors"
+          >
+            <ListChecks className="h-4 w-4" />
+            Tailor for {batchSelectedIds.size} JD{batchSelectedIds.size > 1 ? "s" : ""}
+          </button>
+        </div>
+      )}
+
+      {/* Batch progress */}
+      {batchJobs.length > 0 && (
+        <div className="bg-zinc-800/50 border border-zinc-700 rounded-xl p-5 space-y-3">
+          <h3 className="text-sm font-medium text-zinc-400">Batch Progress</h3>
+          {batchJobs.map((job, i) => (
+            <div key={i} className="flex items-center gap-3">
+              <span className="w-5 flex items-center justify-center">
+                {job.status === "done" && <CheckCircle2 className="h-4 w-4 text-green-400" />}
+                {job.status === "running" && <Loader2 className="h-4 w-4 text-blue-400 animate-spin" />}
+                {job.status === "pending" && <Circle className="h-4 w-4 text-zinc-600" />}
+                {job.status === "error" && <XCircle className="h-4 w-4 text-red-400" />}
+              </span>
+              <span className={`text-sm flex-1 ${job.status === "running" ? "text-blue-300 font-medium" : job.status === "done" ? "text-zinc-200" : job.status === "error" ? "text-red-300" : "text-zinc-500"}`}>
+                {job.jdLabel}
+              </span>
+              {job.status === "done" && job.coverage !== undefined && (
+                <span className={`text-xs font-mono ${job.coverage >= 70 ? "text-green-400" : job.coverage >= 50 ? "text-amber-400" : "text-red-400"}`}>
+                  {job.coverage}% coverage
+                </span>
+              )}
+              {job.status === "error" && (
+                <span className="text-xs text-red-400 truncate max-w-xs">{job.errorMsg}</span>
+              )}
+            </div>
+          ))}
+          {!batchRunning && (
+            <div className="flex gap-3 pt-2">
+              <button
+                onClick={() => { setBatchJobs([]); setBatchMode(false); }}
+                className="text-zinc-400 hover:text-zinc-200 text-sm transition-colors"
+              >
+                Back
+              </button>
+              <button
+                onClick={() => navigate("/download")}
+                className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+              >
+                View Results on Download Page →
+              </button>
+            </div>
+          )}
         </div>
       )}
 

@@ -11,18 +11,7 @@ import type {
 } from "@/types";
 import { Loader2 } from "lucide-react";
 import { useToast } from "@/components/Toast";
-
-function getSelectedModel(): { provider: string; model_key: string } | null {
-  try {
-    const raw = localStorage.getItem("art_selected_model");
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    if (parsed?.provider && parsed?.model_key) return parsed;
-    return null;
-  } catch {
-    return null;
-  }
-}
+import { getSelectedModel } from "@/constants/providers";
 
 export default function EmailPage() {
   const navigate = useNavigate();

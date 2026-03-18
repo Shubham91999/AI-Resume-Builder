@@ -3,19 +3,20 @@ from pydantic import BaseModel
 from typing import Optional
 import logging
 
-from app.models.resume_models import ParsedResume
+from app.models.resume_models import ParsedResume, ResumePatch
 from app.models.score_models import RankingResponse
 from app.services.resume_service import (
     parse_resume,
     get_cached_resume,
     list_cached_resumes,
     clear_cached_resumes,
+    update_cached_resume,
 )
 from app.services.ats_scorer import rank_resumes as do_rank
 from app.services.jd_service import get_cached_jd
 from app.services import drive_service
-from app.utils.dependencies import APIKeys, get_api_keys
-from app.config import MODELS
+from app.utils.dependencies import APIKeys, get_api_keys, not_found_error
+from app.config import MODELS, DEFAULT_PROVIDER, DEFAULT_MODEL_KEY
 
 logger = logging.getLogger(__name__)
 
@@ -36,8 +37,8 @@ def _resolve_key(api_keys: APIKeys, provider: str) -> str:
 @router.post("/upload", response_model=ParsedResume)
 async def upload_resume(
     file: UploadFile = File(...),
-    provider: str = Header(alias="X-LLM-Provider", default="groq"),
-    model_key: str = Header(alias="X-LLM-Model", default="llama-3.3-70b"),
+    provider: str = Header(alias="X-LLM-Provider", default=DEFAULT_PROVIDER),
+    model_key: str = Header(alias="X-LLM-Model", default=DEFAULT_MODEL_KEY),
     api_keys: APIKeys = Depends(get_api_keys),
 ):
     """Upload a single resume file (PDF/DOCX) and parse it via LLM."""
@@ -79,8 +80,8 @@ async def upload_resume(
 @router.post("/upload-multiple")
 async def upload_multiple_resumes(
     files: list[UploadFile] = File(...),
-    provider: str = Header(alias="X-LLM-Provider", default="groq"),
-    model_key: str = Header(alias="X-LLM-Model", default="llama-3.3-70b"),
+    provider: str = Header(alias="X-LLM-Provider", default=DEFAULT_PROVIDER),
+    model_key: str = Header(alias="X-LLM-Model", default=DEFAULT_MODEL_KEY),
     api_keys: APIKeys = Depends(get_api_keys),
 ):
     """Upload multiple resume files and parse them all."""
@@ -137,7 +138,7 @@ async def get_resume(resume_id: str):
     """Get a specific cached parsed resume by ID."""
     resume = get_cached_resume(resume_id)
     if not resume:
-        raise HTTPException(status_code=404, detail=f"Resume '{resume_id}' not found in cache")
+        raise not_found_error("Resume", resume_id)
     return resume
 
 
@@ -146,6 +147,15 @@ async def clear_resumes():
     """Clear all cached resumes."""
     count = clear_cached_resumes()
     return {"cleared": count}
+
+
+@router.patch("/cache/{resume_id}", response_model=ParsedResume)
+async def patch_resume(resume_id: str, patch: ResumePatch):
+    """Manually correct fields on a cached parsed resume."""
+    updated = update_cached_resume(resume_id, patch.model_dump(exclude_none=True))
+    if not updated:
+        raise not_found_error("Resume", resume_id)
+    return updated
 
 
 @router.post("/drive")
@@ -161,8 +171,8 @@ async def import_from_drive():
 class DriveImportRequest(BaseModel):
     """Request body for importing resumes from Google Drive."""
     folder_link: str
-    provider: str = "groq"
-    model_key: str = "llama-3.3-70b"
+    provider: str = DEFAULT_PROVIDER
+    model_key: str = DEFAULT_MODEL_KEY
 
 
 @router.get("/drive/auth-url")

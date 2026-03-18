@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { parseJDText, parseJDUrl } from "@/services/api";
-import { cn } from "@/lib/utils";
+import { parseJDText, parseJDUrl, patchJD } from "@/services/api";
+import { cn, formatRelativeTime } from "@/lib/utils";
 import type { ParsedJD } from "@/types";
 import {
   Loader2,
@@ -18,21 +18,7 @@ import {
   ArrowRight,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
-
-// ── Helpers ─────────────────────────────────────────────────────────────────
-
-function getSelectedModel(): { provider: string; model_key: string } | null {
-  try {
-    const raw = localStorage.getItem("art_selected_model");
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    if (parsed?.provider && parsed?.model_key) return parsed;
-    if (parsed?.provider && parsed?.model) return { provider: parsed.provider, model_key: parsed.model };
-    return null;
-  } catch {
-    return null;
-  }
-}
+import { getSelectedModel } from "@/constants/providers";
 
 const JD_TYPE_LABELS: Record<string, string> = {
   java_backend: "☕ Java Backend",
@@ -54,6 +40,7 @@ export default function JDPage() {
   const [url, setUrl] = useState("");
   const [parsedJD, setParsedJD] = useState<ParsedJD | null>(null);
   const [showRaw, setShowRaw] = useState(false);
+  const [editMode, setEditMode] = useState(false);
 
   const selectedModel = getSelectedModel();
 
@@ -221,9 +208,27 @@ export default function JDPage() {
       )}
 
       {/* Parsed JD display */}
-      {parsedJD && <ParsedJDView jd={parsedJD} showRaw={showRaw} setShowRaw={setShowRaw} />}
+      {parsedJD && !editMode && <ParsedJDView jd={parsedJD} showRaw={showRaw} setShowRaw={setShowRaw} />}
+      {parsedJD && editMode && (
+        <JDEditView
+          jd={parsedJD}
+          onSave={(updated) => { setParsedJD(updated); setEditMode(false); }}
+          onCancel={() => setEditMode(false)}
+        />
+      )}
 
       {/* Actions after parsing */}
+      {parsedJD && !editMode && (
+        <div className="flex items-center justify-between">
+          <button
+            onClick={() => setEditMode(true)}
+            className="text-sm text-muted-foreground hover:text-foreground border border-border rounded-md px-3 py-1.5 transition-colors"
+          >
+            Fix LLM mistakes
+          </button>
+        </div>
+      )}
+
       {parsedJD && (
         <div className="flex gap-3">
           <button
@@ -272,6 +277,7 @@ function ParsedJDView({
             {jd.required_skills.length} required skills,{" "}
             {jd.preferred_skills.length} preferred skills,{" "}
             {jd.keywords_to_match.length} keywords identified
+            {jd.created_at && <span className="ml-2 opacity-70">· {formatRelativeTime(jd.created_at)}</span>}
           </p>
         </div>
       </div>
@@ -373,6 +379,110 @@ function ParsedJDView({
           {jd.raw_text}
         </pre>
       )}
+    </div>
+  );
+}
+
+// ── JD Edit View ─────────────────────────────────────────────────────────────
+
+function JDEditView({
+  jd,
+  onSave,
+  onCancel,
+}: {
+  jd: ParsedJD;
+  onSave: (updated: ParsedJD) => void;
+  onCancel: () => void;
+}) {
+  const [jobTitle, setJobTitle] = useState(jd.job_title);
+  const [company, setCompany] = useState(jd.company);
+  const [requiredSkills, setRequiredSkills] = useState(jd.required_skills.join(", "));
+  const [preferredSkills, setPreferredSkills] = useState(jd.preferred_skills.join(", "));
+  const [keywords, setKeywords] = useState(jd.keywords_to_match.join(", "));
+  const [saving, setSaving] = useState(false);
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      const patch = {
+        job_title: jobTitle.trim(),
+        company: company.trim(),
+        required_skills: requiredSkills.split(",").map((s) => s.trim()).filter(Boolean),
+        preferred_skills: preferredSkills.split(",").map((s) => s.trim()).filter(Boolean),
+        keywords_to_match: keywords.split(",").map((s) => s.trim()).filter(Boolean),
+      };
+      const updated = await patchJD(jd.id, patch);
+      onSave(updated);
+    } catch {
+      // ignore — user can retry
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="rounded-lg border border-border p-5 space-y-4">
+      <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">Edit JD Fields</h3>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div>
+          <label className="text-xs font-medium text-muted-foreground block mb-1">Job Title</label>
+          <input
+            value={jobTitle}
+            onChange={(e) => setJobTitle(e.target.value)}
+            className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+          />
+        </div>
+        <div>
+          <label className="text-xs font-medium text-muted-foreground block mb-1">Company</label>
+          <input
+            value={company}
+            onChange={(e) => setCompany(e.target.value)}
+            className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+          />
+        </div>
+      </div>
+      <div>
+        <label className="text-xs font-medium text-muted-foreground block mb-1">Required Skills (comma-separated)</label>
+        <textarea
+          value={requiredSkills}
+          onChange={(e) => setRequiredSkills(e.target.value)}
+          rows={2}
+          className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring resize-none"
+        />
+      </div>
+      <div>
+        <label className="text-xs font-medium text-muted-foreground block mb-1">Preferred Skills (comma-separated)</label>
+        <textarea
+          value={preferredSkills}
+          onChange={(e) => setPreferredSkills(e.target.value)}
+          rows={2}
+          className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring resize-none"
+        />
+      </div>
+      <div>
+        <label className="text-xs font-medium text-muted-foreground block mb-1">Keywords to Match (comma-separated)</label>
+        <textarea
+          value={keywords}
+          onChange={(e) => setKeywords(e.target.value)}
+          rows={2}
+          className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring resize-none"
+        />
+      </div>
+      <div className="flex gap-3 pt-2">
+        <button
+          onClick={handleSave}
+          disabled={saving}
+          className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50 transition-colors flex items-center gap-2"
+        >
+          {saving && <Loader2 className="h-3.5 w-3.5 animate-spin" />} Save Changes
+        </button>
+        <button
+          onClick={onCancel}
+          className="rounded-md border border-border px-4 py-2 text-sm font-medium text-muted-foreground hover:bg-muted transition-colors"
+        >
+          Cancel
+        </button>
+      </div>
     </div>
   );
 }

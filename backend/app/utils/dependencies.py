@@ -4,8 +4,33 @@ Request-scoped helpers — extract API keys from headers, resolve active model, 
 
 from __future__ import annotations
 
-from fastapi import Header
+from fastapi import Header, HTTPException, Security
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from typing import Optional
+
+from app.config import settings
+
+_bearer = HTTPBearer(auto_error=False)
+
+
+def not_found_error(resource: str, resource_id: str) -> HTTPException:
+    """Return a standardized 404 HTTPException."""
+    return HTTPException(status_code=404, detail=f"{resource} '{resource_id}' not found")
+
+
+async def verify_download_access(
+    credentials: HTTPAuthorizationCredentials | None = Security(_bearer),
+) -> None:
+    """
+    Verify download access when APP_SECRET_TOKEN is configured.
+
+    If APP_SECRET_TOKEN is not set, access is unrestricted (single-user local mode).
+    If it is set, the request must include: Authorization: Bearer <token>
+    """
+    if not settings.app_secret_token:
+        return  # No token configured — open access (local single-user mode)
+    if credentials is None or credentials.credentials != settings.app_secret_token:
+        raise HTTPException(status_code=401, detail="Invalid or missing access token")
 
 
 class APIKeys:

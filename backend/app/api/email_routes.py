@@ -9,7 +9,7 @@ from app.services.email_service import (
 )
 from app.services.tailor_service import get_cached_tailored
 from app.services.jd_service import get_cached_jd
-from app.utils.dependencies import APIKeys, get_api_keys
+from app.utils.dependencies import APIKeys, get_api_keys, not_found_error
 
 router = APIRouter()
 
@@ -22,17 +22,11 @@ async def generate_cold_emails(
     """Generate cold emails (recruiter + hiring manager) for a tailored resume."""
     tailored = get_cached_tailored(req.tailor_id)
     if not tailored:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Tailored resume '{req.tailor_id}' not found. Complete tailoring first.",
-        )
+        raise not_found_error("Tailored resume", req.tailor_id)
 
     jd = get_cached_jd(tailored.jd_id)
     if not jd:
-        raise HTTPException(
-            status_code=404,
-            detail=f"JD '{tailored.jd_id}' not found in cache.",
-        )
+        raise not_found_error("JD", tailored.jd_id)
 
     key = api_keys.get_key(req.provider)
     if not key:
@@ -68,7 +62,7 @@ async def get_email(email_id: str):
     """Get a specific email response by ID."""
     result = get_cached_emails(email_id)
     if not result:
-        raise HTTPException(status_code=404, detail=f"Emails '{email_id}' not found")
+        raise not_found_error("Emails", email_id)
     return result
 
 
@@ -77,8 +71,5 @@ async def get_emails_by_tailor(tailor_id: str):
     """Get emails generated for a specific tailored resume."""
     result = get_emails_for_tailor(tailor_id)
     if not result:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No emails found for tailored resume '{tailor_id}'",
-        )
+        raise not_found_error("Emails for tailored resume", tailor_id)
     return result

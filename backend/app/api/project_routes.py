@@ -17,7 +17,8 @@ from app.services.project_service import (
 from app.services.jd_service import get_cached_jd
 from app.services.llm_service import complete_json
 from app.prompts import project_rewriter
-from app.utils.dependencies import APIKeys, get_api_keys
+from app.utils.dependencies import APIKeys, get_api_keys, not_found_error
+from app.config import DEFAULT_PROVIDER, DEFAULT_MODEL_KEY
 
 router = APIRouter()
 
@@ -42,7 +43,7 @@ async def get_single_project(project_id: str):
     """Get a single project by ID."""
     proj = get_project(project_id)
     if not proj:
-        raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found")
+        raise not_found_error("Project", project_id)
     return proj
 
 
@@ -51,7 +52,7 @@ async def update_existing_project(project_id: str, data: ProjectBankUpdate):
     """Update an existing project."""
     result = update_project(project_id, data)
     if not result:
-        raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found")
+        raise not_found_error("Project", project_id)
     return result
 
 
@@ -59,7 +60,7 @@ async def update_existing_project(project_id: str, data: ProjectBankUpdate):
 async def delete_existing_project(project_id: str):
     """Delete a project from the bank."""
     if not delete_project(project_id):
-        raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found")
+        raise not_found_error("Project", project_id)
     return {"deleted": True, "id": project_id}
 
 
@@ -74,7 +75,7 @@ async def select_projects(
     """Select the top N projects from the bank that best match a JD."""
     jd = get_cached_jd(jd_id)
     if not jd:
-        raise HTTPException(status_code=404, detail=f"JD '{jd_id}' not found")
+        raise not_found_error("JD", jd_id)
     return select_projects_for_jd(jd, top_n=top_n)
 
 
@@ -83,17 +84,17 @@ async def rewrite_project_bullets(
     project_id: str,
     jd_id: str,
     api_keys: APIKeys = Depends(get_api_keys),
-    provider: str = "groq",
-    model_key: str = "llama-3.3-70b",
+    provider: str = DEFAULT_PROVIDER,
+    model_key: str = DEFAULT_MODEL_KEY,
 ):
     """Rewrite a project's bullets to better match a JD using LLM."""
     proj = get_project(project_id)
     if not proj:
-        raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found")
+        raise not_found_error("Project", project_id)
 
     jd = get_cached_jd(jd_id)
     if not jd:
-        raise HTTPException(status_code=404, detail=f"JD '{jd_id}' not found")
+        raise not_found_error("JD", jd_id)
 
     key = api_keys.get_key(provider)
     if not key:

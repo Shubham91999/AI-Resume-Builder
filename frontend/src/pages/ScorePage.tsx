@@ -2,7 +2,10 @@ import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { rankResumes, getCachedJDs, getCachedResumes } from "@/services/api";
 import type { RankingResponse, ResumeScore, ParsedJD, ParsedResume } from "@/types";
-import { Loader2, RefreshCw } from "lucide-react";
+import { Loader2, RefreshCw, BarChart2 } from "lucide-react";
+
+// Multi-JD comparison: resume name → { jdId → score }
+type MultiScoreMap = Record<string, Record<string, number>>;
 
 export default function ScorePage() {
   const navigate = useNavigate();
@@ -14,13 +17,18 @@ export default function ScorePage() {
   const [selectedJdId, setSelectedJdId] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
+  // Multi-JD comparison
+  const [compareMode, setCompareMode] = useState(false);
+  const [selectedJdIds, setSelectedJdIds] = useState<Set<string>>(new Set());
+  const [multiScores, setMultiScores] = useState<MultiScoreMap>({});
+  const [multiLoading, setMultiLoading] = useState(false);
+
   // Load cached JDs and resumes
   useEffect(() => {
     Promise.all([getCachedJDs(), getCachedResumes()])
       .then(([jdData, resumeData]) => {
         setJds(jdData);
         setResumes(resumeData);
-        // Auto-select latest JD
         if (jdData.length > 0) {
           setSelectedJdId(jdData[jdData.length - 1].id);
         }
@@ -30,10 +38,10 @@ export default function ScorePage() {
 
   // Auto-run scoring when JD is selected and resumes exist
   useEffect(() => {
-    if (selectedJdId && resumes.length > 0) {
+    if (selectedJdId && resumes.length > 0 && !compareMode) {
       runScoring(selectedJdId);
     }
-  }, [selectedJdId, resumes.length]);
+  }, [selectedJdId, resumes.length, compareMode]);
 
   const runScoring = async (jdId: string) => {
     setLoading(true);
@@ -49,6 +57,39 @@ export default function ScorePage() {
       setError(detail ?? "Scoring failed. Ensure you have a parsed JD and uploaded resumes.");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const toggleJdSelection = (jdId: string) => {
+    setSelectedJdIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(jdId)) next.delete(jdId);
+      else next.add(jdId);
+      return next;
+    });
+  };
+
+  const runMultiScoring = async () => {
+    if (selectedJdIds.size === 0) return;
+    setMultiLoading(true);
+    setError(null);
+    setMultiScores({});
+    try {
+      const results = await Promise.all(
+        [...selectedJdIds].map((jdId) => rankResumes(jdId).then((r: RankingResponse) => ({ jdId, r })))
+      );
+      const map: MultiScoreMap = {};
+      for (const { jdId, r } of results) {
+        for (const score of r.rankings) {
+          if (!map[score.resume_name]) map[score.resume_name] = {};
+          map[score.resume_name][jdId] = score.overall_score;
+        }
+      }
+      setMultiScores(map);
+    } catch {
+      setError("Multi-JD scoring failed.");
+    } finally {
+      setMultiLoading(false);
     }
   };
 
@@ -80,21 +121,66 @@ export default function ScorePage() {
         </div>
       )}
 
-      {/* JD Selector */}
-      {jds.length > 1 && (
-        <div>
-          <label className="text-sm font-medium text-zinc-400 block mb-1">Select Job Description</label>
-          <select
-            value={selectedJdId ?? ""}
-            onChange={(e) => setSelectedJdId(e.target.value)}
-            className="bg-zinc-800 border border-zinc-600 rounded-lg px-3 py-2 text-sm text-zinc-200 w-full max-w-md"
-          >
-            {jds.map((jd) => (
-              <option key={jd.id} value={jd.id}>
-                {jd.job_title} @ {jd.company}
-              </option>
-            ))}
-          </select>
+      {/* Mode toggle + JD selector */}
+      {jds.length > 0 && (
+        <div className="space-y-3">
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => { setCompareMode(false); setMultiScores({}); }}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${!compareMode ? "bg-blue-600 text-white" : "bg-zinc-800 text-zinc-400 hover:text-zinc-200"}`}
+            >
+              <RefreshCw className="h-3.5 w-3.5" /> Single JD
+            </button>
+            {jds.length > 1 && (
+              <button
+                onClick={() => { setCompareMode(true); setSelectedJdIds(new Set(jds.map((j) => j.id))); }}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${compareMode ? "bg-blue-600 text-white" : "bg-zinc-800 text-zinc-400 hover:text-zinc-200"}`}
+              >
+                <BarChart2 className="h-3.5 w-3.5" /> Compare JDs
+              </button>
+            )}
+          </div>
+
+          {!compareMode && jds.length > 1 && (
+            <div>
+              <label className="text-sm font-medium text-zinc-400 block mb-1">Select Job Description</label>
+              <select
+                value={selectedJdId ?? ""}
+                onChange={(e) => setSelectedJdId(e.target.value)}
+                className="bg-zinc-800 border border-zinc-600 rounded-lg px-3 py-2 text-sm text-zinc-200 w-full max-w-md"
+              >
+                {jds.map((jd) => (
+                  <option key={jd.id} value={jd.id}>{jd.job_title} @ {jd.company}</option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {compareMode && (
+            <div className="space-y-2">
+              <p className="text-sm text-zinc-400">Select JDs to compare your resumes against:</p>
+              <div className="space-y-1">
+                {jds.map((jd) => (
+                  <label key={jd.id} className="flex items-center gap-2 cursor-pointer group">
+                    <input
+                      type="checkbox"
+                      checked={selectedJdIds.has(jd.id)}
+                      onChange={() => toggleJdSelection(jd.id)}
+                      className="accent-blue-500"
+                    />
+                    <span className="text-sm text-zinc-300 group-hover:text-zinc-100">{jd.job_title} @ {jd.company}</span>
+                  </label>
+                ))}
+              </div>
+              <button
+                onClick={runMultiScoring}
+                disabled={multiLoading || selectedJdIds.size === 0}
+                className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 disabled:bg-zinc-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+              >
+                {multiLoading ? <><Loader2 className="h-4 w-4 animate-spin" /> Scoring…</> : `Score vs ${selectedJdIds.size} JD${selectedJdIds.size > 1 ? "s" : ""}`}
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -113,8 +199,59 @@ export default function ScorePage() {
         </div>
       )}
 
+      {/* Multi-JD comparison table */}
+      {compareMode && Object.keys(multiScores).length > 0 && !multiLoading && (
+        <div className="space-y-3">
+          <h2 className="text-lg font-semibold">JD Comparison</h2>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm border-collapse">
+              <thead>
+                <tr>
+                  <th className="text-left text-zinc-400 font-medium py-2 pr-4">Resume</th>
+                  {[...selectedJdIds].map((jdId) => {
+                    const jd = jds.find((j) => j.id === jdId);
+                    return (
+                      <th key={jdId} className="text-center text-zinc-400 font-medium py-2 px-3 text-xs">
+                        {jd ? `${jd.job_title}@${jd.company}` : jdId.slice(0, 8)}
+                      </th>
+                    );
+                  })}
+                </tr>
+              </thead>
+              <tbody>
+                {Object.entries(multiScores)
+                  .sort(([, a], [, b]) => Math.max(...Object.values(b)) - Math.max(...Object.values(a)))
+                  .map(([resumeName, scores]) => {
+                    const maxScore = Math.max(...Object.values(scores));
+                    return (
+                      <tr key={resumeName} className="border-t border-zinc-700">
+                        <td className="py-2 pr-4 text-zinc-200 font-medium">{resumeName}</td>
+                        {[...selectedJdIds].map((jdId) => {
+                          const score = scores[jdId] ?? null;
+                          const isBest = score === maxScore && score !== null;
+                          return (
+                            <td key={jdId} className="text-center py-2 px-3">
+                              {score !== null ? (
+                                <span className={`font-semibold ${isBest ? "text-green-400" : score >= 70 ? "text-green-300" : score >= 50 ? "text-amber-400" : "text-red-400"}`}>
+                                  {score.toFixed(0)}%{isBest ? " ★" : ""}
+                                </span>
+                              ) : (
+                                <span className="text-zinc-600">—</span>
+                              )}
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    );
+                  })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
       {/* Rankings Table */}
-      {ranking && !loading && (
+      {ranking && !loading && !compareMode && (
         <div className="space-y-4">
           <div className="flex items-center justify-between">
             <h2 className="text-lg font-semibold">
